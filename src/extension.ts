@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { documentSource, sanitizeFilename, toMarkdown, toPdf } from './documentation';
+import { exportMarkdown, exportPdf, runDocumentationPipeline, scanWorkspace } from './documentation';
 
 interface WorkspaceInfo {
 	root: vscode.Uri;
@@ -13,30 +13,14 @@ async function getGitWorkspace(): Promise<WorkspaceInfo | undefined> {
 	if (!folder) {return undefined;}
 	try {
 		await fs.stat(path.join(folder.uri.fsPath, '.git'));
-		const files = await vscode.workspace.findFiles(
-			'**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx}',
-			'**/{.git,node_modules,dist,build}/**',
-		);
+		const files = (await scanWorkspace(folder.uri.fsPath)).map((file) => file.relativePath);
 		return {
 			root: folder.uri,
-			files: files.map((file) => path.relative(folder.uri.fsPath, file.fsPath)).sort(),
+			files: files.sort(),
 		};
 	} catch {
 		return undefined;
 	}
-}
-
-async function generate(root: vscode.Uri, relativeFile: string, format: 'markdown' | 'pdf'): Promise<string> {
-	const filePath = path.join(root.fsPath, relativeFile);
-	const code = await fs.readFile(filePath, 'utf8');
-	const documentation = documentSource(filePath, code);
-	const outputDirectory = path.join(root.fsPath, 'legacy-doc');
-	await fs.mkdir(outputDirectory, { recursive: true });
-	const filename = `Doc_LegacyDoc_${sanitizeFilename(relativeFile)}`;
-	const outputPath = path.join(outputDirectory, `${filename}.${format === 'markdown' ? 'md' : 'pdf'}`);
-	if (format === 'markdown') {await fs.writeFile(outputPath, toMarkdown(relativeFile, documentation), 'utf8');}
-	else {await fs.writeFile(outputPath, toPdf(relativeFile, documentation));}
-	return outputPath;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -51,10 +35,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		panel.webview.onDidReceiveMessage(async (message: { command: string; file: string }) => {
 			if (!['markdown', 'pdf'].includes(message.command) || !workspace.files.includes(message.file)) {return;}
 			try {
-				const outputPath = await generate(workspace.root, message.file, message.command as 'markdown' | 'pdf');
-				const document = await vscode.workspace.openTextDocument(outputPath);
-				await vscode.window.showTextDocument(document, { preview: false });
-				vscode.window.showInformationMessage(`Legacy Doc: ${path.basename(outputPath)} gerado.`);
+				await vscode.window.withProgress({
+					location: vscode.ProgressLocation.Notification,
+					title: 'Legacy Doc',
+					cancellable: false,
+				}, async (progress) => {
+					const code = await fs.readFile(path.join(workspace.root.fsPath, message.file), 'utf8');
+					let lastProgress = 0;
+					const result = await runDocumentationPipeline(message.file, code, (step, value) => {
+						progress.report({ message: step, increment: Math.max(0, value - lastProgress) });
+						lastProgress = value;
+					});
+					if (!result.verifier.approved) {
+						vscode.window.showWarningMessage(`Legacy Doc: o Verifier encontrou pontos de atenção. ${result.verifier.feedback_message}`);
+					}
+					const outputPath = message.command === 'markdown'
+						? await exportMarkdown(workspace.root.fsPath, message.file, result.documentation)
+						: await exportPdf(workspace.root.fsPath, message.file, result.documentation);
+					const document = await vscode.workspace.openTextDocument(outputPath);
+					await vscode.window.showTextDocument(document, { preview: false });
+					vscode.window.showInformationMessage(`Legacy Doc: ${path.basename(outputPath)} gerado.`);
+				});
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
 				vscode.window.showErrorMessage(`Legacy Doc não conseguiu gerar a documentação: ${reason}`);

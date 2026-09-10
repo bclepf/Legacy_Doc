@@ -1,4 +1,6 @@
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import PDFDocument = require('pdfkit');
 
 export interface ArgumentDocumentation {
 	name: string;
@@ -22,8 +24,94 @@ export interface FileDocumentation {
 	functions: FunctionDocumentation[];
 }
 
-const functionPattern = /(?:^|\n)\s*(?:(?:template\s*<[\s\S]*?>)\s*)?(?:(?:inline|static|virtual|constexpr|explicit|extern|friend)\s+)*(?<returnType>[A-Za-z_][\w:\s*&<>,~]*?)\s+(?<name>[A-Za-z_]\w*(?:::\w+)*)\s*\((?<parameters>[^)]*)\)\s*(?:const\s*)?(?:noexcept\s*)?(?:\{|$)/gm;
+export interface ReaderOutput {
+	ready_to_write: boolean;
+	queries: string;
+	user_facing_message: string;
+}
+
+export interface VerifierOutput {
+	approved: boolean;
+	technical_audit: string;
+	feedback_message: string;
+}
+
+export interface WorkspaceSource {
+	relativePath: string;
+	content: string;
+}
+
+export interface PipelineResult {
+	documentation: FileDocumentation;
+	reader: ReaderOutput;
+	verifier: VerifierOutput;
+}
+
 const sourceExtensions = new Set(['.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx']);
+const ignoredDirectories = new Set(['.git', 'node_modules', 'build', 'dist', 'out', 'target', 'coverage', '.vscode']);
+const maxFileBytes = 512 * 1024;
+const linesPerChunk = 150;
+const openAiEndpoint = 'https://api.openai.com/v1/chat/completions';
+
+const readerPrompt = `You are the Reader Agent of the Legacy Doc Team.
+Your mission is to perform a "technical X-ray" of the legacy C++ code to identify what is missing for a perfect documentation.
+
+DIAGNOSTIC CRITERIA:
+1. Context Gap Identification: Analyze if there are external function calls, inherited classes, or global variables not defined in the provided snippet.
+2. Exception Detection: Check for throw statements or calls to external methods that might raise hidden exceptions (e.g., database or network calls).
+3. Critical Analysis:
+   - If the code is self-sufficient: mark ready_to_write as True and output "READY_FOR_WRITING".
+   - If context is missing: mark ready_to_write as False and generate specific technical queries.
+
+RULES (Based on HRBP Framework):
+- Action & Situation: Clearly identify what the code is doing and in which context it operates before requesting more data.
+- One Question at a Time: If you need to clarify something with the user/leadership, ask ONLY ONE question to promote focus and reflection.
+
+BRAND VOICE (WaveCast):
+- Be the "Reliable Guide". Your language should be clear, avoiding unnecessary jargon, and always welcoming.
+- Start your user-facing message with something like: "Olá, Time WaveCast! Identifiquei uma lacuna no contexto deste módulo..." (if missing context) or a positive confirmation (if ready).
+
+LANGUAGE:
+- Internal logic (queries field) MUST be in English.
+- User-facing questions (user_facing_message field) MUST be in Brazilian Portuguese.`;
+
+const writerPrompt = `Role: Senior C++ Technical Writer & Documentation Specialist.
+Tone of Voice: Educational, Friendly, and Reliable (LEGACY DOC Brand Standard).
+
+You are the Writer Agent of the LEGACY DOC Team. Your primary function is to transform C++ code snippets into structured JSON documentation.
+
+CRITICAL OUTPUT RULES:
+- Document only complete function definitions explicitly present in the provided C++ snippet.
+- Do not document includes, macros, global variables, comments, config strings, enum values, or external functions.
+- If the snippet contains no complete function definition, return an empty functions list.
+- Keep summary under 18 words.
+- Keep description between 35 and 65 words.
+- Never generate long explanations.
+- Never document functions that are only called but not defined in the snippet.
+
+WRITING CRITERIA:
+1. The description field must follow Situation/Context, Action, Impact.
+2. summary and description must be in Brazilian Portuguese.
+3. description must be in first person and educational.
+4. Start the description with "Olá, Time LEGACY DOC!".
+5. Do not hallucinate. Never invent arguments, return types, or exceptions.
+6. If the code does not explicitly throw exceptions, raises must be [].
+7. JSON keys and technical data must be in English.`;
+
+const verifierPrompt = `You are the Verifier Agent, the final auditor of the Legacy Doc Team.
+Your job is to ensure the documentation is 100% faithful to the original C++ code.
+
+AUDIT CRITERIA:
+1. Hallucination Check: Did the Writer invent any arguments, types, or exceptions?
+2. Technical Consistency: Do the args, returns, and raises match the C++ signature perfectly?
+3. Situational Model Audit: Does the description clearly explain the Situation, Action, and Impact?
+
+RULES:
+- If adequate, approve and justify based on technical rules.
+- If inadequate, reject and include ONE reflective question to help the Writer improve.
+- Highlight where the documentation was particularly clear or humanized.
+- Keep technical_audit in English.
+- Keep feedback_message in Brazilian Portuguese.`;
 
 export function isSupportedSource(filePath: string): boolean {
 	return sourceExtensions.has(path.extname(filePath).toLowerCase());
@@ -36,60 +124,106 @@ export function sanitizeFilename(filePath: string): string {
 	return name || 'documentation';
 }
 
-function splitArguments(parameters: string): ArgumentDocumentation[] {
-	if (!parameters.trim() || parameters.trim() === 'void') {
-		return [];
-	}
-
-	return parameters.split(',').map((parameter) => {
-		const normalized = parameter.trim().replace(/\s+/g, ' ');
-		const withoutDefault = normalized.split('=')[0].trim();
-		const match = /^(?<type>.+?)\s+(?<name>[A-Za-z_]\w*(?:\s*\[\])?)$/.exec(withoutDefault);
-		if (!match?.groups) {
-			return { name: withoutDefault || 'unnamed', type: withoutDefault || 'unknown' };
+export async function scanWorkspace(rootPath: string): Promise<WorkspaceSource[]> {
+	const results: WorkspaceSource[] = [];
+	async function visit(directory: string): Promise<void> {
+		const entries = await fs.readdir(directory, { withFileTypes: true });
+		for (const entry of entries) {
+			if (entry.isDirectory() && !ignoredDirectories.has(entry.name)) {
+				await visit(path.join(directory, entry.name));
+				continue;
+			}
+			if (!entry.isFile() || !isSupportedSource(entry.name)) {continue;}
+			const fullPath = path.join(directory, entry.name);
+			const stat = await fs.stat(fullPath);
+			if (stat.size > maxFileBytes) {continue;}
+			try {
+				results.push({
+					relativePath: path.relative(rootPath, fullPath),
+					content: await fs.readFile(fullPath, 'utf8'),
+				});
+			} catch (error) {
+				if (!(error instanceof Error) || !/encoding|utf-8|ENOENT/i.test(error.message)) {throw error;}
+			}
 		}
-		return { name: match.groups.name, type: match.groups.type };
+	}
+	await visit(rootPath);
+	return results.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+async function callModel(model: string, system: string, user: string, temperature: number): Promise<string> {
+	const apiKey = process.env.OPENAI_API_KEY;
+	if (!apiKey) {throw new Error('OPENAI_API_KEY não foi encontrada nas variáveis de ambiente.');}
+	const response = await fetch(openAiEndpoint, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			model,
+			temperature,
+			messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+			response_format: { type: 'json_object' },
+		}),
 	});
+	if (!response.ok) {throw new Error(`OpenAI retornou HTTP ${response.status}: ${await response.text()}`);}
+	const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+	const content = payload.choices?.[0]?.message?.content;
+	if (!content) {throw new Error('A resposta do modelo não continha conteúdo.');}
+	return content;
 }
 
-function findClosingBrace(code: string, openBrace: number): number {
-	let depth = 0;
-	for (let index = openBrace; index < code.length; index += 1) {
-		if (code[index] === '{') {depth += 1;}
-		if (code[index] === '}') {
-			depth -= 1;
-			if (depth === 0) {return index;}
-		}
+function parseJson<T>(content: string, agent: string): T {
+	try {
+		return JSON.parse(content) as T;
+	} catch (error) {
+		throw new Error(`O agente ${agent} retornou JSON inválido.`, { cause: error });
 	}
-	return code.length - 1;
 }
 
-export function documentSource(filePath: string, code: string): FileDocumentation {
+export async function runReaderAgent(code: string): Promise<ReaderOutput> {
+	return parseJson<ReaderOutput>(await callModel('gpt-4o-mini', readerPrompt, `C++ Code:\n${code}`, 0.1), 'Reader');
+}
+
+export async function runWriterAgent(code: string, context: string): Promise<FileDocumentation> {
+	return parseJson<FileDocumentation>(
+		await callModel('gpt-4o-mini', writerPrompt, `C++ Code:\n${code}\n\nExtra Context (Searcher):\n${context}`, 0.2),
+		'Writer',
+	);
+}
+
+export async function runVerifierAgent(code: string, documentation: FileDocumentation): Promise<VerifierOutput> {
+	return parseJson<VerifierOutput>(
+		await callModel('gpt-4o', verifierPrompt, `Original C++ Code:\n${code}\n\nGenerated Documentation:\n${JSON.stringify(documentation)}`, 0),
+		'Verifier',
+	);
+}
+
+export async function runDocumentationPipeline(
+	filePath: string,
+	code: string,
+	onProgress?: (message: string, increment: number) => void,
+): Promise<PipelineResult> {
+	const reader = await runReaderAgent(code);
+	onProgress?.('Reader: análise de contexto concluída', 20);
+	let context = `Path: ${filePath}`;
+	context += reader.ready_to_write ? '\n\n[Status]: The code is self-sufficient.' : `\n\n[Reader queries pending search]: ${reader.queries}`;
+	const chunks = splitCode(code);
 	const functions: FunctionDocumentation[] = [];
-	let match: RegExpExecArray | null;
-	while ((match = functionPattern.exec(code)) !== null) {
-		const groups = match.groups;
-		if (!groups) {continue;}
-		const openBrace = code.indexOf('{', match.index + match[0].length - 1);
-		if (openBrace < 0) {continue;}
-		const body = code.slice(openBrace, findClosingBrace(code, openBrace) + 1);
-		const name = groups.name.split('::').pop() ?? groups.name;
-		const returnType = groups.returnType.trim().replace(/\s+/g, ' ');
-		const args = splitArguments(groups.parameters);
-		const signature = `${returnType} ${groups.name}(${groups.parameters.trim()})`;
-		const raises = [...body.matchAll(/\bthrow\s+(?:std::)?([A-Za-z_]\w*)/g)].map((item) => item[1]);
-		functions.push({
-			name,
-			kind: 'function',
-			signature,
-			return_type: returnType,
-			args,
-			summary: `Implementa a função ${name} no módulo ${path.basename(filePath)}.`,
-			description: `Olá, Time LEGACY DOC! Nesta função, recebo ${args.length ? 'os parâmetros declarados e ' : ''}executo a lógica definida no código. O resultado é a aplicação desse comportamento no módulo, mantendo a assinatura e os efeitos observáveis originais.`,
-			raises,
-		});
+	for (let index = 0; index < chunks.length; index += 1) {
+		const result = await runWriterAgent(chunks[index], context);
+		functions.push(...(result.functions ?? []));
+		onProgress?.(`Writer: processado bloco ${index + 1} de ${chunks.length}`, 20 + ((index + 1) / chunks.length) * 55);
 	}
-	return { functions };
+	const documentation = { functions };
+	const verifier = await runVerifierAgent(code, documentation);
+	onProgress?.('Verifier: auditoria concluída', 90);
+	return { documentation, reader, verifier };
+}
+
+function splitCode(code: string): string[] {
+	const lines = code.split('\n');
+	const chunks: string[] = [];
+	for (let index = 0; index < lines.length; index += linesPerChunk) {chunks.push(lines.slice(index, index + linesPerChunk).join('\n'));}
+	return chunks.length ? chunks : [''];
 }
 
 function markdownAnchor(value: string): string {
@@ -99,15 +233,13 @@ function markdownAnchor(value: string): string {
 export function toMarkdown(filePath: string, documentation: FileDocumentation): string {
 	const displayName = path.basename(filePath);
 	const functions = documentation.functions;
-	let output = `# 📄 Documentação de Código: \`${displayName}\`\n\n`;
-	output += `> Documentação gerada automaticamente para o módulo **${displayName}**.\n\n`;
+	let output = `# 📄 Documentação de Código: \`${displayName}\`\n\n> Documentação gerada automaticamente para o módulo **${displayName}**.\n\n`;
 	if (!functions.length) {return `${output}Nenhuma definição completa de função foi encontrada neste arquivo.\n`;}
 	output += '## 📑 Índice de Funções\n\n';
 	for (const func of functions) {output += `- [${func.name}](#${markdownAnchor(func.name)})\n`;}
 	output += '\n---\n\n';
 	for (const func of functions) {
-		output += `## 🛠 Função: \`${func.name}\`\n\n> **Resumo:** ${func.summary}\n\n`;
-		output += `### 💻 Assinatura\n\n\`\`\`cpp\n${func.signature}\n\`\`\`\n\n`;
+		output += `## 🛠 Função: \`${func.name}\`\n\n> **Resumo:** ${func.summary}\n\n### 💻 Assinatura\n\n\`\`\`cpp\n${func.signature}\n\`\`\`\n\n`;
 		if (func.args.length) {
 			output += '### 📥 Parâmetros\n\n| Tipo | Nome |\n| :--- | :--- |\n';
 			for (const arg of func.args) {output += `| \`${arg.type}\` | **${arg.name}** |\n`;}
@@ -120,34 +252,29 @@ export function toMarkdown(filePath: string, documentation: FileDocumentation): 
 	return output;
 }
 
-function pdfEscape(value: string): string {
-	return value.replace(/[^\x20-\x7E\n]/g, '?').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+export async function exportMarkdown(rootPath: string, filePath: string, documentation: FileDocumentation): Promise<string> {
+	const outputPath = path.join(rootPath, 'LEGACY_DOC.md');
+	await fs.writeFile(outputPath, toMarkdown(filePath, documentation), 'utf8');
+	return outputPath;
 }
 
-export function toPdf(filePath: string, documentation: FileDocumentation): Uint8Array {
-	const lines = toMarkdown(filePath, documentation).replace(/[`*_#>|📄📑🛠💻📥📤⚠️📖]/g, '').split(/\r?\n/);
-	const pages: string[][] = [];
-	for (let index = 0; index < lines.length; index += 45) {pages.push(lines.slice(index, index + 45));}
-	if (!pages.length) {pages.push(['No documentation generated.']);}
-	const objects: string[] = [
-		'<< /Type /Catalog /Pages 2 0 R >>',
-		'<< /Type /Pages /Kids [' + pages.map((_, index) => `${4 + index * 2} 0 R`).join(' ') + `] /Count ${pages.length} >>`,
-		'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-	];
-	for (let index = 0; index < pages.length; index += 1) {
-		const content = pages[index].map((line, lineIndex) => `BT /F1 10 Tf 40 ${770 - lineIndex * 16} Td (${pdfEscape(line.slice(0, 110))}) Tj ET`).join('\n');
-		objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + index * 2} 0 R >>`);
-		objects.push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+export async function exportPdf(rootPath: string, filePath: string, documentation: FileDocumentation): Promise<string> {
+	const outputPath = path.join(rootPath, 'LEGACY_DOC.pdf');
+	const pdf = new PDFDocument({ margin: 50 });
+	const chunks: Buffer[] = [];
+	pdf.on('data', (chunk: Buffer) => chunks.push(chunk));
+	const finished = new Promise<void>((resolve, reject) => {
+		pdf.on('end', resolve);
+		pdf.on('error', reject);
+	});
+	pdf.fontSize(18).fillColor('#0066cc').text('Legacy Doc - Documentação Técnica', { align: 'center' });
+	pdf.moveDown().fontSize(14).fillColor('#000000').text(`Módulo: ${path.basename(filePath)}`);
+	for (const line of toMarkdown(filePath, documentation).replace(/[^\x20-\x7E\nÀ-ÿ]/g, '').split(/\r?\n/)) {
+		if (line.startsWith('#')) {pdf.moveDown().fontSize(12).text(line.replace(/^#+\s*/, ''));}
+		else {pdf.fontSize(10).text(line);}
 	}
-	let pdf = '%PDF-1.4\n';
-	const offsets: number[] = [0];
-	for (let index = 0; index < objects.length; index += 1) {
-		offsets.push(pdf.length);
-		pdf += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`;
-	}
-	const xref = pdf.length;
-	pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-	for (let index = 1; index < offsets.length; index += 1) {pdf += `${String(offsets[index]).padStart(10, '0')} 00000 n \n`;}
-	pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-	return new TextEncoder().encode(pdf);
+	pdf.end();
+	await finished;
+	await fs.writeFile(outputPath, Buffer.concat(chunks));
+	return outputPath;
 }
