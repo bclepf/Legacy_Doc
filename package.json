@@ -9,13 +9,15 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:legacy-doc.open"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "legacy-doc.helloWorld",
-        "title": "Hello World"
+        "command": "legacy-doc.open",
+        "title": "Legacy Doc: Documentar repositório"
       }
     ]
   },
