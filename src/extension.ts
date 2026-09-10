@@ -49,6 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					if (!result.verifier.approved) {
 						vscode.window.showWarningMessage(`Legacy Doc: o Verifier encontrou pontos de atenção. ${result.verifier.feedback_message}`);
 					}
+					progress.report({ message: 'Export: gravando documentação', increment: 10 });
 					const outputPath = message.command === 'markdown'
 						? await exportMarkdown(workspace.root.fsPath, message.file, result.documentation)
 						: await exportPdf(workspace.root.fsPath, message.file, result.documentation);

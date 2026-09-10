@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as vscode from 'vscode';
 import PDFDocument = require('pdfkit');
 
 export interface ArgumentDocumentation {
@@ -126,28 +127,23 @@ export function sanitizeFilename(filePath: string): string {
 
 export async function scanWorkspace(rootPath: string): Promise<WorkspaceSource[]> {
 	const results: WorkspaceSource[] = [];
-	async function visit(directory: string): Promise<void> {
-		const entries = await fs.readdir(directory, { withFileTypes: true });
-		for (const entry of entries) {
-			if (entry.isDirectory() && !ignoredDirectories.has(entry.name)) {
-				await visit(path.join(directory, entry.name));
-				continue;
-			}
-			if (!entry.isFile() || !isSupportedSource(entry.name)) {continue;}
-			const fullPath = path.join(directory, entry.name);
-			const stat = await fs.stat(fullPath);
-			if (stat.size > maxFileBytes) {continue;}
-			try {
-				results.push({
-					relativePath: path.relative(rootPath, fullPath),
-					content: await fs.readFile(fullPath, 'utf8'),
-				});
-			} catch (error) {
-				if (!(error instanceof Error) || !/encoding|utf-8|ENOENT/i.test(error.message)) {throw error;}
-			}
+	const files = await vscode.workspace.findFiles(
+		new vscode.RelativePattern(rootPath, '**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx}'),
+		'**/{.git,node_modules,build,dist,out,target,coverage,.vscode}/**',
+	);
+	for (const file of files) {
+		const fullPath = file.fsPath;
+		const stat = await fs.stat(fullPath);
+		if (stat.size > maxFileBytes) {continue;}
+		try {
+			results.push({
+				relativePath: path.relative(rootPath, fullPath),
+				content: await fs.readFile(fullPath, 'utf8'),
+			});
+		} catch (error) {
+			if (!(error instanceof Error) || !/encoding|utf-8|ENOENT/i.test(error.message)) {throw error;}
 		}
 	}
-	await visit(rootPath);
 	return results.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 
