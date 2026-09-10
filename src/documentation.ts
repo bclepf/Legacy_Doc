@@ -129,7 +129,7 @@ export async function scanWorkspace(rootPath: string): Promise<WorkspaceSource[]
 	const results: WorkspaceSource[] = [];
 	const files = await vscode.workspace.findFiles(
 		new vscode.RelativePattern(rootPath, '**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx}'),
-		'**/{.git,node_modules,build,dist,out,target,coverage,.vscode}/**',
+		'**/{.git,node_modules,build,dist,out,target,coverage,.vscode,.venv}/**',
 	);
 	for (const file of files) {
 		const fullPath = file.fsPath;
@@ -145,6 +145,11 @@ export async function scanWorkspace(rootPath: string): Promise<WorkspaceSource[]
 		}
 	}
 	return results.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+export async function loadWorkspaceContext(rootPath: string): Promise<string> {
+	const sources = await scanWorkspace(rootPath);
+	return sources.map((source) => `\n===== ${source.relativePath} =====\n${source.content}`).join('\n');
 }
 
 async function callModel(model: string, system: string, user: string, temperature: number): Promise<string> {
@@ -196,11 +201,13 @@ export async function runVerifierAgent(code: string, documentation: FileDocument
 export async function runDocumentationPipeline(
 	filePath: string,
 	code: string,
+	workspaceContext = '',
 	onProgress?: (message: string, increment: number) => void,
 ): Promise<PipelineResult> {
 	const reader = await runReaderAgent(code);
 	onProgress?.('Reader: análise de contexto concluída', 20);
 	let context = `Path: ${filePath}`;
+	if (workspaceContext) {context += `\n\nWorkspace context:\n${workspaceContext}`;}
 	context += reader.ready_to_write ? '\n\n[Status]: The code is self-sufficient.' : `\n\n[Reader queries pending search]: ${reader.queries}`;
 	const chunks = splitCode(code);
 	const functions: FunctionDocumentation[] = [];

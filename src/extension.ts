@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { exportMarkdown, exportPdf, runDocumentationPipeline, scanWorkspace } from './documentation';
+import { exportMarkdown, exportPdf, loadWorkspaceContext, runDocumentationPipeline, scanWorkspace } from './documentation';
 
 interface WorkspaceInfo {
 	root: vscode.Uri;
@@ -41,8 +41,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					cancellable: false,
 				}, async (progress) => {
 					const code = await fs.readFile(path.join(workspace.root.fsPath, message.file), 'utf8');
+					const workspaceContext = await loadWorkspaceContext(workspace.root.fsPath);
 					let lastProgress = 0;
-					const result = await runDocumentationPipeline(message.file, code, (step, value) => {
+					const result = await runDocumentationPipeline(message.file, code, workspaceContext, (step, value) => {
 						progress.report({ message: step, increment: Math.max(0, value - lastProgress) });
 						lastProgress = value;
 					});
