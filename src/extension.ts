@@ -62,6 +62,82 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // 1.5 Comando de Cadastro (Criar Nova Conta via /v1/auth/register)
+    const registerCmd = vscode.commands.registerCommand('legacydoc.register', async () => {
+        const displayName = await vscode.window.showInputBox({
+            title: 'Criar Conta no Legacy Doc (1/4)',
+            prompt: 'Digite seu nome de exibição (opcional — pressione Enter para pular)',
+            placeHolder: 'Ex: João Silva',
+            validateInput: (val) => val.length > 120 ? 'O nome deve ter no máximo 120 caracteres.' : null
+        });
+        if (displayName === undefined) return; // Cancelado com Esc
+
+        const email = await vscode.window.showInputBox({
+            title: 'Criar Conta no Legacy Doc (2/4)',
+            prompt: 'Digite seu e-mail',
+            placeHolder: 'seu@email.com',
+            validateInput: (val) => {
+                if (!val || !val.includes('@')) {
+                    return 'Informe um endereço de e-mail válido.';
+                }
+                return null;
+            }
+        });
+        if (!email) return;
+
+        const password = await vscode.window.showInputBox({
+            title: 'Criar Conta no Legacy Doc (3/4)',
+            prompt: 'Crie uma senha',
+            password: true,
+            validateInput: (val) => {
+                if (!val || val.length < 6) {
+                    return 'A senha deve ter pelo menos 6 caracteres.';
+                }
+                return null;
+            }
+        });
+        if (!password) return;
+
+        const confirmPassword = await vscode.window.showInputBox({
+            title: 'Criar Conta no Legacy Doc (4/4)',
+            prompt: 'Confirme sua senha',
+            password: true,
+            validateInput: (val) => {
+                if (val !== password) {
+                    return 'As senhas não coincidem.';
+                }
+                return null;
+            }
+        });
+        if (!confirmPassword) return;
+
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Criando sua conta...'
+                },
+                async () => {
+                    await apiClient.register({
+                        email: email.trim(),
+                        password,
+                        display_name: displayName.trim() ? displayName.trim() : null
+                    });
+
+                    const user = await apiClient.getMe();
+                    await definirEstadoLogin(true);
+                    vscode.window.showInformationMessage(
+                        `Conta criada com sucesso! Bem-vindo(a), ${user.display_name || user.email} (Plano: ${user.plan.display_name}).`
+                    );
+                }
+            );
+        } catch (err: any) {
+            await apiClient.clearToken();
+            await definirEstadoLogin(false);
+            vscode.window.showErrorMessage(`Não foi possível criar a conta: ${err.message}`);
+        }
+    });
+
     // 2. Comando de Logout
     const logoutCmd = vscode.commands.registerCommand('legacydoc.logout', async () => {
         await apiClient.clearToken();
@@ -93,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(loginCmd, logoutCmd, generateMdCmd, generatePdfCmd);
+    context.subscriptions.push(loginCmd, registerCmd, logoutCmd, generateMdCmd, generatePdfCmd);
 }
 
 /**

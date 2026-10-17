@@ -17,8 +17,13 @@
     "commands": [
       {
         "command": "legacydoc.login",
-        "title": "Legacy Doc: Configurar Login / API Key",
+        "title": "Legacy Doc: Login / Configurar API Key",
         "icon": "$(key)"
+      },
+      {
+        "command": "legacydoc.register",
+        "title": "Legacy Doc: Criar Nova Conta",
+        "icon": "$(person-add)"
       },
       {
         "command": "legacydoc.logout",
@@ -56,7 +61,7 @@
     "viewsWelcome": [
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou API Key para liberar as ferramentas de análise.\n[$(key) Configurar Login / API Key](command:legacydoc.login)",
+        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Configurar Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)",
         "when": "!legacydoc.isAuthenticated"
       },
       {
@@ -74,6 +79,10 @@
       "commandPalette": [
         {
           "command": "legacydoc.login",
+          "when": "!legacydoc.isAuthenticated"
+        },
+        {
+          "command": "legacydoc.register",
           "when": "!legacydoc.isAuthenticated"
         },
         {
