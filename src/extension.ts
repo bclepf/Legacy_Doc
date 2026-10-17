@@ -4,17 +4,25 @@ import * as path from 'path';
 import { LegacyDocApiClient } from './apiClient';
 import { DocumentationService } from './documentationService';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
     const apiClient = new LegacyDocApiClient(context.secrets);
     const docService = new DocumentationService(apiClient);
 
-	// Registra uma árvore vazia para habilitar a tela de boas-vindas com os botões
-	vscode.window.registerTreeDataProvider('legacydoc.welcomeView', {
-    getTreeItem: (element: vscode.TreeItem) => element,
-    getChildren: () => []
-	});
+    // Registra a view vazia para renderizar os botões do viewsWelcome
+    vscode.window.registerTreeDataProvider('legacydoc.welcomeView', {
+        getTreeItem: (element: vscode.TreeItem) => element,
+        getChildren: () => []
+    });
 
-    // 1. Comando de Login (Email/Senha ou API Key)
+    // Função auxiliar para atualizar o estado de login na interface do VS Code
+    const definirEstadoLogin = async (autenticado: boolean) => {
+        await vscode.commands.executeCommand('setContext', 'legacydoc.isAuthenticated', autenticado);
+    };
+
+    // Verifica na inicialização se já existe um token/API Key válido salvo
+    await validarSessaoInicial(apiClient, definirEstadoLogin);
+
+    // 1. Comando de Login
     const loginCmd = vscode.commands.registerCommand('legacydoc.login', async () => {
         const metodo = await vscode.window.showQuickPick(
             ['Entrar com E-mail e Senha', 'Inserir API Key (Longa Duração)'],
@@ -29,11 +37,12 @@ export function activate(context: vscode.ExtensionContext) {
                     prompt: 'Cole sua API Key do Legacy Doc',
                     password: true
                 });
-                if (apiKey) {
-                    await apiClient.setToken(apiKey.trim());
-                    const user = await apiClient.getMe();
-                    vscode.window.showInformationMessage(`Autenticado como ${user.email} (Plano: ${user.plan.display_name})`);
-                }
+                if (!apiKey) return;
+
+                await apiClient.setToken(apiKey.trim());
+                const user = await apiClient.getMe();
+                await definirEstadoLogin(true);
+                vscode.window.showInformationMessage(`Autenticado como ${user.email} (Plano: ${user.plan.display_name})`);
             } else {
                 const email = await vscode.window.showInputBox({ prompt: 'Digite seu e-mail' });
                 if (!email) return;
@@ -42,14 +51,25 @@ export function activate(context: vscode.ExtensionContext) {
 
                 await apiClient.login({ email, password });
                 const user = await apiClient.getMe();
+                await definirEstadoLogin(true);
                 vscode.window.showInformationMessage(`Bem-vindo, ${user.display_name || user.email}!`);
             }
         } catch (err: any) {
+            // Se a credencial inserida for inválida, limpa o token e mantém deslogado
+            await apiClient.clearToken();
+            await definirEstadoLogin(false);
             vscode.window.showErrorMessage(`Falha na autenticação: ${err.message}`);
         }
     });
 
-    // 2. Comando para Gerar Markdown (Verifica se há pasta .git aberta)
+    // 2. Comando de Logout
+    const logoutCmd = vscode.commands.registerCommand('legacydoc.logout', async () => {
+        await apiClient.clearToken();
+        await definirEstadoLogin(false);
+        vscode.window.showInformationMessage('Sessão encerrada no Legacy Doc.');
+    });
+
+    // 3. Comando para Gerar Markdown
     const generateMdCmd = vscode.commands.registerCommand('legacydoc.generateMarkdown', async () => {
         const rootPath = validarRepositorioGit();
         if (!rootPath) return;
@@ -61,7 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // 3. Comando para Gerar PDF
+    // 4. Comando para Gerar PDF
     const generatePdfCmd = vscode.commands.registerCommand('legacydoc.generatePdf', async () => {
         const rootPath = validarRepositorioGit();
         if (!rootPath) return;
@@ -73,7 +93,30 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(loginCmd, generateMdCmd, generatePdfCmd);
+    context.subscriptions.push(loginCmd, logoutCmd, generateMdCmd, generatePdfCmd);
+}
+
+/**
+ * Testa o token salvo ao abrir o VS Code; se expirado ou inexistente, bloqueia a UI
+ */
+async function validarSessaoInicial(
+    apiClient: LegacyDocApiClient,
+    definirEstadoLogin: (autenticado: boolean) => Promise<void>
+) {
+    const token = await apiClient.getToken();
+    if (!token) {
+        await definirEstadoLogin(false);
+        return;
+    }
+
+    try {
+        await apiClient.getMe();
+        await definirEstadoLogin(true);
+    } catch {
+        // Token expirado ou revogado na API
+        await apiClient.clearToken();
+        await definirEstadoLogin(false);
+    }
 }
 
 function validarRepositorioGit(): string | undefined {
