@@ -302,6 +302,10 @@ export class LegacyDocApiClient {
         return Buffer.from(arrayBuffer);
     }
 
+    async deleteDocument(documentId: string): Promise<void> {
+        await this.request<void>(`/v1/documents/${documentId}`, { method: 'DELETE' });
+    }
+
     // ==========================================
     // 5. METADADOS E HEALTH (/v1/meta/* & /health)
     // ==========================================

@@ -285,10 +285,239 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    // 5. Comando para Listar, Visualizar, Baixar e Deletar Documentações (/v1/documents)
+    const DELETED_DOCS_KEY = 'legacydoc.deletedDocumentIds';
+
+    const removerDocumentacao = async (docId: string, docPath: string) => {
+        try {
+            // Tenta deletar diretamente na API
+            await apiClient.deleteDocument(docId);
+        } catch (err: any) {
+            // Se a rota DELETE /v1/documents/{id} ainda não existir no backend (404/405),
+            // registra o ID localmente para removê-lo da listagem da extensão
+            const msg = String(err.message || '');
+            if (msg.includes('405') || msg.includes('404')) {
+                const ocultos = context.globalState.get<string[]>(DELETED_DOCS_KEY, []);
+                if (!ocultos.includes(docId)) {
+                    await context.globalState.update(DELETED_DOCS_KEY, [...ocultos, docId]);
+                }
+            } else {
+                throw err;
+            }
+        }
+
+        // Se existir arquivo local gerado em docs_legacydoc/, remove do disco também
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (workspaceFolder) {
+            const safeName = docPath.replace(/[\\/]/g, '_');
+            const docsDir = path.join(workspaceFolder, 'docs_legacydoc');
+            for (const ext of ['md', 'pdf']) {
+                const localFile = path.join(docsDir, `${safeName}.${ext}`);
+                if (fs.existsSync(localFile)) {
+                    fs.unlinkSync(localFile);
+                }
+            }
+        }
+    };
+
+    const listDocsCmd = vscode.commands.registerCommand('legacydoc.listDocuments', async () => {
+        try {
+            const allDocs = await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Buscando histórico de documentações...'
+                },
+                async () => {
+                    return await apiClient.listDocuments({ limit: 200 });
+                }
+            );
+
+            // Filtra documentações que já foram excluídas
+            const deletedIds = new Set(context.globalState.get<string[]>(DELETED_DOCS_KEY, []));
+            const docs = (allDocs || []).filter(d => !deletedIds.has(d.id));
+
+            if (docs.length === 0) {
+                vscode.window.showInformationMessage('Nenhuma documentação disponível nesta conta.');
+                return;
+            }
+
+            // Item especial no topo para exclusão em lote + lista de documentos
+            const batchDeleteOption = {
+                label: '$(trash) Excluir Várias Documentações Antigas...',
+                description: 'Selecionar múltiplos registros para apagar de uma vez',
+                detail: 'Limpe documentações antigas do seu histórico',
+                isBatchDelete: true,
+                doc: undefined as any
+            };
+
+            const docItems = docs.map((doc) => {
+                const dataFormatada = new Date(doc.created_at).toLocaleString('pt-BR');
+                return {
+                    label: `$(file-code) ${doc.path}`,
+                    description: `${doc.language.toUpperCase()} • ${doc.depth} • ${dataFormatada}`,
+                    detail: `${doc.summary || 'Sem resumo disponível'} (${doc.symbol_count} símbolos | ${doc.finding_count} apontamentos)`,
+                    isBatchDelete: false,
+                    doc
+                };
+            });
+
+            const selecionado = await vscode.window.showQuickPick(
+                [batchDeleteOption, ...docItems],
+                {
+                    title: `Minhas Documentações Geradas (${docs.length})`,
+                    placeHolder: 'Pesquise um arquivo ou escolha a opção de excluir várias...',
+                    matchOnDescription: true,
+                    matchOnDetail: true
+                }
+            );
+
+            if (!selecionado) return;
+
+            // Fluxo 1: Exclusão em Lote (Múltipla escolha com checkboxes)
+            if (selecionado.isBatchDelete) {
+                const paraExcluir = await vscode.window.showQuickPick(docItems, {
+                    title: 'Selecione as documentações antigas que deseja excluir',
+                    placeHolder: 'Marque os itens desejados e pressione Enter para confirmar',
+                    canPickMany: true,
+                    matchOnDescription: true
+                });
+
+                if (!paraExcluir || paraExcluir.length === 0) return;
+
+                const confirmacao = await vscode.window.showWarningMessage(
+                    `Tem certeza que deseja excluir ${paraExcluir.length} documentação(ões)?`,
+                    { modal: true },
+                    'Sim, Excluir'
+                );
+
+                if (confirmacao !== 'Sim, Excluir') return;
+
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: 'Legacy Doc: Excluindo documentações selecionadas...'
+                    },
+                    async () => {
+                        for (const item of paraExcluir) {
+                            await removerDocumentacao(item.doc.id, item.doc.path);
+                        }
+                    }
+                );
+
+                vscode.window.showInformationMessage(`${paraExcluir.length} documentação(ões) excluída(s) com sucesso.`);
+                return;
+            }
+
+            // Fluxo 2: Ações para uma única documentação selecionada
+            const acao = await vscode.window.showQuickPick(
+                [
+                    {
+                        label: '$(eye) Visualizar no Editor (Markdown)',
+                        description: 'Abre a documentação em uma nova aba do VS Code',
+                        id: 'preview'
+                    },
+                    {
+                        label: '$(markdown) Salvar como Markdown (.md)',
+                        description: 'Baixa o arquivo .md para o computador',
+                        id: 'md'
+                    },
+                    {
+                        label: '$(file-pdf) Salvar como PDF (.pdf)',
+                        description: 'Baixa o arquivo .pdf para o computador',
+                        id: 'pdf'
+                    },
+                    {
+                        label: '$(trash) Excluir Documentação',
+                        description: 'Remove esta documentação do histórico e da pasta local',
+                        id: 'delete'
+                    }
+                ],
+                {
+                    title: `Ações para: ${selecionado.doc.path}`,
+                    placeHolder: 'Escolha o que deseja fazer com esta documentação'
+                }
+            );
+
+            if (!acao) return;
+
+            if (acao.id === 'delete') {
+                const dataDoc = new Date(selecionado.doc.created_at).toLocaleString('pt-BR');
+                const confirmar = await vscode.window.showWarningMessage(
+                    `Deseja realmente excluir a documentação de "${selecionado.doc.path}" (${dataDoc})?`,
+                    { modal: true },
+                    'Sim, Excluir'
+                );
+
+                if (confirmar !== 'Sim, Excluir') return;
+
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: `Legacy Doc: Excluindo ${selecionado.doc.path}...`
+                    },
+                    async () => {
+                        await removerDocumentacao(selecionado.doc.id, selecionado.doc.path);
+                    }
+                );
+
+                vscode.window.showInformationMessage(`Documentação de "${selecionado.doc.path}" excluída com sucesso!`);
+            } else if (acao.id === 'preview') {
+                const buffer = await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: `Legacy Doc: Carregando ${selecionado.doc.path}...`
+                    },
+                    async () => await apiClient.exportDocument(selecionado.doc.id, 'markdown')
+                );
+
+                const textDocument = await vscode.workspace.openTextDocument({
+                    content: buffer.toString('utf-8'),
+                    language: 'markdown'
+                });
+                await vscode.window.showTextDocument(textDocument, { preview: false });
+            } else {
+                const formato = acao.id === 'pdf' ? 'pdf' : 'markdown';
+                const ext = acao.id === 'pdf' ? 'pdf' : 'md';
+                const safeName = `${selecionado.doc.path.replace(/[\\/]/g, '_')}.${ext}`;
+
+                const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                const defaultUri = workspaceFolder
+                    ? vscode.Uri.file(path.join(workspaceFolder, safeName))
+                    : vscode.Uri.file(safeName);
+
+                const saveUri = await vscode.window.showSaveDialog({
+                    defaultUri,
+                    filters: acao.id === 'pdf'
+                        ? { 'Documento PDF': ['pdf'] }
+                        : { 'Markdown': ['md'] },
+                    title: `Salvar Documentação (${safeName})`
+                });
+
+                if (!saveUri) return;
+
+                await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: `Legacy Doc: Exportando arquivo .${ext}...`
+                    },
+                    async () => {
+                        const buffer = await apiClient.exportDocument(selecionado.doc.id, formato);
+                        fs.writeFileSync(saveUri.fsPath, buffer);
+                    }
+                );
+
+                vscode.window.showInformationMessage(`Arquivo salvo em: ${saveUri.fsPath}`);
+            }
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Erro ao gerenciar documentações: ${err.message}`);
+        }
+    });
+    
     context.subscriptions.push(
         loginCmd,
         registerCmd,
         resetPasswordCmd,
+        listDocsCmd,
         logoutCmd,
         generateMdCmd,
         generatePdfCmd

@@ -31,6 +31,11 @@
         "icon": "$(unlock)"
       },
       {
+        "command": "legacydoc.listDocuments",
+        "title": "Legacy Doc: Minhas Documentações Geradas",
+        "icon": "$(history)"
+      },
+      {
         "command": "legacydoc.logout",
         "title": "Legacy Doc: Sair (Logout)",
         "icon": "$(sign-out)"
@@ -66,17 +71,17 @@
     "viewsWelcome": [
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Configurar Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)\n[$(unlock) Esqueci Minha Senha](command:legacydoc.resetPassword)",
+        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)\n[$(unlock) Esqueci Minha Senha](command:legacydoc.resetPassword)",
         "when": "!legacydoc.isAuthenticated"
       },
       {
         "view": "legacydoc.welcomeView",
-        "contents": "A pasta atual não possui um repositório Git inicializado.\n\nInicie um repositório Git (`git init`) ou abra um projeto versionado para habilitar a análise.\n\n---\nConta conectada:\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
+        "contents": "A pasta atual não possui um repositório Git inicializado.\n\nInicie um repositório Git (`git init`) ou abra um projeto versionado para habilitar a análise.\n\n---\nHistórico e Conta:\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
         "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount == 0"
       },
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Repositório Git detectado! Escolha o formato para documentar seu código:\n[$(markdown) Gerar Documentação (.md)](command:legacydoc.generateMarkdown)\n[$(file-pdf) Gerar Documentação (.pdf)](command:legacydoc.generatePdf)\n\n---\nGerenciamento de Sessão:\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
+        "contents": "Repositório Git detectado! Escolha o formato para documentar seu código:\n[$(markdown) Gerar Documentação (.md)](command:legacydoc.generateMarkdown)\n[$(file-pdf) Gerar Documentação (.pdf)](command:legacydoc.generatePdf)\n\n---\nHistórico e Sessão:\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
         "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount > 0"
       }
     ],
@@ -93,6 +98,10 @@
         {
           "command": "legacydoc.resetPassword",
           "when": "!legacydoc.isAuthenticated"
+        },
+        {
+          "command": "legacydoc.listDocuments",
+          "when": "legacydoc.isAuthenticated"
         },
         {
           "command": "legacydoc.logout",
@@ -119,9 +128,14 @@
           "group": "navigation@2"
         },
         {
-          "command": "legacydoc.logout",
+          "command": "legacydoc.listDocuments",
           "when": "view == legacydoc.welcomeView && legacydoc.isAuthenticated",
           "group": "navigation@3"
+        },
+        {
+          "command": "legacydoc.logout",
+          "when": "view == legacydoc.welcomeView && legacydoc.isAuthenticated",
+          "group": "navigation@4"
         }
       ]
     }
