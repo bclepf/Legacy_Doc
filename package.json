@@ -17,13 +17,18 @@
     "commands": [
       {
         "command": "legacydoc.login",
-        "title": "Legacy Doc: Login / Configurar API Key",
+        "title": "Legacy Doc: Login / API Key",
         "icon": "$(key)"
       },
       {
         "command": "legacydoc.register",
         "title": "Legacy Doc: Criar Nova Conta",
         "icon": "$(person-add)"
+      },
+      {
+        "command": "legacydoc.resetPassword",
+        "title": "Legacy Doc: Esqueci Minha Senha",
+        "icon": "$(unlock)"
       },
       {
         "command": "legacydoc.logout",
@@ -61,7 +66,7 @@
     "viewsWelcome": [
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Configurar Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)",
+        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Configurar Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)\n[$(unlock) Esqueci Minha Senha](command:legacydoc.resetPassword)",
         "when": "!legacydoc.isAuthenticated"
       },
       {
@@ -83,6 +88,10 @@
         },
         {
           "command": "legacydoc.register",
+          "when": "!legacydoc.isAuthenticated"
+        },
+        {
+          "command": "legacydoc.resetPassword",
           "when": "!legacydoc.isAuthenticated"
         },
         {

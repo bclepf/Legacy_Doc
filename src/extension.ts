@@ -137,6 +137,122 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage(`Não foi possível criar a conta: ${err.message}`);
         }
     });
+// 1.6 Comando de Recuperação de Senha (Fluxo contínuo e direto)
+    const resetPasswordCmd = vscode.commands.registerCommand('legacydoc.resetPassword', async () => {
+        // Etapa 1: Solicita apenas o e-mail imediatamente ao clicar no botão
+        const email = await vscode.window.showInputBox({
+            title: 'Recuperar Senha (1/4) — Informe seu E-mail',
+            prompt: 'Digite o e-mail cadastrado para receber o código de validação',
+            placeHolder: 'seu@email.com',
+            ignoreFocusOut: true,
+            validateInput: (val) => {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!val || !emailRegex.test(val.trim())) {
+                    return 'Informe um endereço de e-mail válido.';
+                }
+                return null;
+            }
+        });
+        if (!email) return;
+
+        // Dispara o envio do e-mail na API
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Enviando código de recuperação para o seu e-mail...'
+                },
+                async () => {
+                    await apiClient.requestPasswordReset({ email: email.trim() });
+                }
+            );
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Erro ao solicitar recuperação: ${err.message}`);
+            return;
+        }
+
+        // Etapa 2: Abre imediatamente o campo aguardando o código (mantém aberto ao trocar de janela)
+        const tokenInput = await vscode.window.showInputBox({
+            title: 'Recuperar Senha (2/4) — Código de Validação',
+            prompt: `Código enviado para ${email.trim()}. Verifique seu e-mail e cole o código abaixo:`,
+            placeHolder: 'Cole aqui o código recebido por e-mail',
+            ignoreFocusOut: true,
+            validateInput: (val) => {
+                if (!val || val.trim().length < 16) {
+                    return 'O código de validação deve ter pelo menos 16 caracteres.';
+                }
+                return null;
+            }
+        });
+        if (!tokenInput) return;
+
+        // Caso o usuário cole um link completo do e-mail (ex: ?token=xyz), extrai apenas o código automaticamente
+        let cleanToken = tokenInput.trim();
+        if (cleanToken.includes('token=')) {
+            try {
+                const urlParams = new URLSearchParams(cleanToken.split('?')[1]);
+                cleanToken = urlParams.get('token') || cleanToken;
+            } catch {
+                // Mantém o valor original se não for uma URL padrão
+            }
+        }
+
+        // Etapa 3: Nova Senha
+        const newPassword = await vscode.window.showInputBox({
+            title: 'Recuperar Senha (3/4) — Nova Senha',
+            prompt: 'Digite sua nova senha',
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: (val) => {
+                if (!val || val.length < 6) {
+                    return 'A nova senha deve ter pelo menos 6 caracteres.';
+                }
+                return null;
+            }
+        });
+        if (!newPassword) return;
+
+        // Etapa 4: Confirmação da Nova Senha
+        const confirmNewPassword = await vscode.window.showInputBox({
+            title: 'Recuperar Senha (4/4) — Confirmar Nova Senha',
+            prompt: 'Digite novamente sua nova senha',
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: (val) => {
+                if (val !== newPassword) {
+                    return 'As senhas não coincidem.';
+                }
+                return null;
+            }
+        });
+        if (!confirmNewPassword) return;
+
+        // Confirma na API e já inicia a sessão automaticamente
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Validando código e atualizando senha...'
+                },
+                async () => {
+                    await apiClient.confirmPasswordReset({
+                        token: cleanToken,
+                        new_password: newPassword
+                    });
+
+                    const user = await apiClient.getMe();
+                    await definirEstadoLogin(true);
+                    vscode.window.showInformationMessage(
+                        `Senha redefinida com sucesso! Conectado como ${user.display_name || user.email}.`
+                    );
+                }
+            );
+        } catch (err: any) {
+            await apiClient.clearToken();
+            await definirEstadoLogin(false);
+            vscode.window.showErrorMessage(`Código inválido ou expirado: ${err.message}`);
+        }
+    });
 
     // 2. Comando de Logout
     const logoutCmd = vscode.commands.registerCommand('legacydoc.logout', async () => {
@@ -169,7 +285,14 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(loginCmd, registerCmd, logoutCmd, generateMdCmd, generatePdfCmd);
+    context.subscriptions.push(
+        loginCmd,
+        registerCmd,
+        resetPasswordCmd,
+        logoutCmd,
+        generateMdCmd,
+        generatePdfCmd
+    );
 }
 
 /**
