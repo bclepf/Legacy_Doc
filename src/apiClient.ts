@@ -55,7 +55,8 @@ export class LegacyDocApiClient {
     ): Promise<T> {
         const headers = new Headers(options.headers || {});
 
-        if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+        // Só define Content-Type: application/json quando houver body na requisição (POST / PATCH)
+        if (options.body && !headers.has('Content-Type') && !(options.body instanceof FormData)) {
             headers.set('Content-Type', 'application/json');
         }
 
@@ -270,6 +271,10 @@ export class LegacyDocApiClient {
         return await this.request<DocumentResponse>(`/v1/documents/${documentId}`, { method: 'GET' });
     }
 
+    async deleteDocument(documentId: string): Promise<void> {
+        await this.request<void>(`/v1/documents/${documentId}`, { method: 'DELETE' });
+    }
+
     /**
      * Exporta o documento no formato solicitado (ex: 'markdown' ou 'pdf').
      * Retorna um Buffer pronto para ser salvo no disco com fs.writeFileSync.
@@ -294,16 +299,14 @@ export class LegacyDocApiClient {
         const contentType = response.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
             const data: any = await response.json();
-            const textContent = typeof data === 'string' ? data : (data.content || data.markdown || JSON.stringify(data, null, 2));
+            const textContent = typeof data === 'string'
+                ? data
+                : (data.content || data.markdown || JSON.stringify(data, null, 2));
             return Buffer.from(textContent, 'utf-8');
         }
 
         const arrayBuffer = await response.arrayBuffer();
         return Buffer.from(arrayBuffer);
-    }
-
-    async deleteDocument(documentId: string): Promise<void> {
-        await this.request<void>(`/v1/documents/${documentId}`, { method: 'DELETE' });
     }
 
     // ==========================================
