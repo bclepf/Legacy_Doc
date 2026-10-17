@@ -14,13 +14,82 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
-    "commands": [
+  "commands": [
+    {
+      "command": "legacydoc.login",
+      "title": "Legacy Doc: Autenticar (Login / API Key)",
+      "icon": "$(key)"
+    },
+    {
+      "command": "legacydoc.generateMarkdown",
+      "title": "Legacy Doc: Gerar Documentação (.md)",
+      "icon": "$(markdown)"
+    },
+    {
+      "command": "legacydoc.generatePdf",
+      "title": "Legacy Doc: Gerar Documentação (.pdf)",
+      "icon": "$(file-pdf)"
+    }
+  ],
+  "viewsContainers": {
+    "activitybar": [
       {
-        "command": "legacy-doc.open",
-        "title": "Legacy Doc: Documentar repositório"
+        "id": "legacydoc-sidebar",
+        "title": "Legacy Doc",
+        "icon": "$(book)"
       }
     ]
   },
+  "views": {
+    "legacydoc-sidebar": [
+      {
+        "id": "legacydoc.welcomeView",
+        "name": "Gerador de Documentação"
+      }
+    ]
+  },
+  "viewsWelcome": [
+    {
+      "view": "legacydoc.welcomeView",
+      "contents": "A pasta atual não possui um repositório Git inicializado.\n\nInicie um repositório Git (`git init`) ou abra um projeto versionado para habilitar a geração de documentação.",
+      "when": "gitOpenRepositoryCount == 0"
+    },
+    {
+      "view": "legacydoc.welcomeView",
+      "contents": "Repositório Git detectado! Escolha o formato para documentar seu código:\n[$(markdown) Gerar Documentação (.md)](command:legacydoc.generateMarkdown)\n[$(file-pdf) Gerar Documentação (.pdf)](command:legacydoc.generatePdf)\n\n---\nGerenciamento de Conta:\n[$(key) Configurar Login / API Key](command:legacydoc.login)",
+      "when": "gitOpenRepositoryCount > 0"
+    }
+  ],
+  "menus": {
+    "commandPalette": [
+      {
+        "command": "legacydoc.generateMarkdown",
+        "when": "gitOpenRepositoryCount > 0"
+      },
+      {
+        "command": "legacydoc.generatePdf",
+        "when": "gitOpenRepositoryCount > 0"
+      }
+    ],
+    "view/title": [
+      {
+        "command": "legacydoc.generateMarkdown",
+        "when": "view == legacydoc.welcomeView && gitOpenRepositoryCount > 0",
+        "group": "navigation@1"
+      },
+      {
+        "command": "legacydoc.generatePdf",
+        "when": "view == legacydoc.welcomeView && gitOpenRepositoryCount > 0",
+        "group": "navigation@2"
+      },
+      {
+        "command": "legacydoc.login",
+        "when": "view == legacydoc.welcomeView",
+        "group": "navigation@3"
+      }
+    ]
+  }
+},
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && npm run lint && node esbuild.js",
@@ -36,6 +105,7 @@
     "test": "vscode-test"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
     "@types/vscode": "^1.137.0",
@@ -53,6 +123,7 @@
   },
   "dependencies": {
     "@types/pdfkit": "^0.17.6",
+    "adm-zip": "^0.6.1",
     "pdfkit": "^0.20.2"
   }
 }
