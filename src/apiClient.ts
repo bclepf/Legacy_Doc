@@ -271,8 +271,11 @@ export class LegacyDocApiClient {
         return await this.request<DocumentResponse>(`/v1/documents/${documentId}`, { method: 'GET' });
     }
 
-    async deleteDocument(documentId: string): Promise<void> {
-        await this.request<void>(`/v1/documents/${documentId}`, { method: 'DELETE' });
+    /**
+     * Remove o histórico do Job e suas documentações atreladas no banco de dados
+     */
+    async deleteJobRecord(jobId: string): Promise<void> {
+        await this.request<void>(`/v1/jobs/${jobId}/history`, { method: 'DELETE' });
     }
 
     /**

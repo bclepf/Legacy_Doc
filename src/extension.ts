@@ -4,25 +4,28 @@ import * as path from 'path';
 import { LegacyDocApiClient } from './apiClient';
 import { DocumentationService } from './documentationService';
 
-export async function activate(context: vscode.ExtensionContext) {
+export function activate(context: vscode.ExtensionContext) {
     const apiClient = new LegacyDocApiClient(context.secrets);
     const docService = new DocumentationService(apiClient);
 
-    // Registra a view vazia para renderizar os botões do viewsWelcome
+    // Registra uma árvore vazia para habilitar a tela de boas-vindas (viewsWelcome) na barra lateral
     vscode.window.registerTreeDataProvider('legacydoc.welcomeView', {
         getTreeItem: (element: vscode.TreeItem) => element,
         getChildren: () => []
     });
 
-    // Função auxiliar para atualizar o estado de login na interface do VS Code
+    // Atualiza a variável de contexto no VS Code para alternar os botões da interface
     const definirEstadoLogin = async (autenticado: boolean) => {
         await vscode.commands.executeCommand('setContext', 'legacydoc.isAuthenticated', autenticado);
     };
 
-    // Verifica na inicialização se já existe um token/API Key válido salvo
-    await validarSessaoInicial(apiClient, definirEstadoLogin);
+    // Inicializa o estado e valida a sessão em segundo plano sem bloquear a abertura da janela
+    definirEstadoLogin(false);
+    validarSessaoInicial(apiClient, definirEstadoLogin);
 
-    // 1. Comando de Login
+    // =========================================================================
+    // 1. COMANDO DE LOGIN (E-mail/Senha ou API Key)
+    // =========================================================================
     const loginCmd = vscode.commands.registerCommand('legacydoc.login', async () => {
         const metodo = await vscode.window.showQuickPick(
             ['Entrar com E-mail e Senha', 'Inserir API Key (Longa Duração)'],
@@ -35,49 +38,65 @@ export async function activate(context: vscode.ExtensionContext) {
             if (metodo.startsWith('Inserir API Key')) {
                 const apiKey = await vscode.window.showInputBox({
                     prompt: 'Cole sua API Key do Legacy Doc',
-                    password: true
+                    password: true,
+                    ignoreFocusOut: true
                 });
                 if (!apiKey) return;
 
                 await apiClient.setToken(apiKey.trim());
                 const user = await apiClient.getMe();
                 await definirEstadoLogin(true);
-                vscode.window.showInformationMessage(`Autenticado como ${user.email} (Plano: ${user.plan.display_name})`);
+                vscode.window.showInformationMessage(
+                    `Autenticado como ${user.email} (Plano: ${user.plan.display_name})`
+                );
             } else {
-                const email = await vscode.window.showInputBox({ prompt: 'Digite seu e-mail' });
+                const email = await vscode.window.showInputBox({
+                    prompt: 'Digite seu e-mail',
+                    placeHolder: 'seu@email.com',
+                    ignoreFocusOut: true
+                });
                 if (!email) return;
-                const password = await vscode.window.showInputBox({ prompt: 'Digite sua senha', password: true });
+
+                const password = await vscode.window.showInputBox({
+                    prompt: 'Digite sua senha',
+                    password: true,
+                    ignoreFocusOut: true
+                });
                 if (!password) return;
 
-                await apiClient.login({ email, password });
+                await apiClient.login({ email: email.trim(), password });
                 const user = await apiClient.getMe();
                 await definirEstadoLogin(true);
                 vscode.window.showInformationMessage(`Bem-vindo, ${user.display_name || user.email}!`);
             }
         } catch (err: any) {
-            // Se a credencial inserida for inválida, limpa o token e mantém deslogado
             await apiClient.clearToken();
             await definirEstadoLogin(false);
             vscode.window.showErrorMessage(`Falha na autenticação: ${err.message}`);
         }
     });
 
-    // 1.5 Comando de Cadastro (Criar Nova Conta via /v1/auth/register)
+    // =========================================================================
+    // 2. COMANDO DE CADASTRO (Criar Nova Conta)
+    // =========================================================================
     const registerCmd = vscode.commands.registerCommand('legacydoc.register', async () => {
         const displayName = await vscode.window.showInputBox({
             title: 'Criar Conta no Legacy Doc (1/4)',
             prompt: 'Digite seu nome de exibição (opcional — pressione Enter para pular)',
             placeHolder: 'Ex: João Silva',
-            validateInput: (val) => val.length > 120 ? 'O nome deve ter no máximo 120 caracteres.' : null
+            ignoreFocusOut: true,
+            validateInput: (val) => (val.length > 120 ? 'O nome deve ter no máximo 120 caracteres.' : null)
         });
-        if (displayName === undefined) return; // Cancelado com Esc
+        if (displayName === undefined) return;
 
         const email = await vscode.window.showInputBox({
             title: 'Criar Conta no Legacy Doc (2/4)',
             prompt: 'Digite seu e-mail',
             placeHolder: 'seu@email.com',
+            ignoreFocusOut: true,
             validateInput: (val) => {
-                if (!val || !val.includes('@')) {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!val || !emailRegex.test(val.trim())) {
                     return 'Informe um endereço de e-mail válido.';
                 }
                 return null;
@@ -89,6 +108,7 @@ export async function activate(context: vscode.ExtensionContext) {
             title: 'Criar Conta no Legacy Doc (3/4)',
             prompt: 'Crie uma senha',
             password: true,
+            ignoreFocusOut: true,
             validateInput: (val) => {
                 if (!val || val.length < 6) {
                     return 'A senha deve ter pelo menos 6 caracteres.';
@@ -102,6 +122,7 @@ export async function activate(context: vscode.ExtensionContext) {
             title: 'Criar Conta no Legacy Doc (4/4)',
             prompt: 'Confirme sua senha',
             password: true,
+            ignoreFocusOut: true,
             validateInput: (val) => {
                 if (val !== password) {
                     return 'As senhas não coincidem.';
@@ -137,9 +158,11 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage(`Não foi possível criar a conta: ${err.message}`);
         }
     });
-// 1.6 Comando de Recuperação de Senha (Fluxo contínuo e direto)
+
+    // =========================================================================
+    // 3. COMANDO DE RECUPERAÇÃO DE SENHA (Fluxo Contínuo)
+    // =========================================================================
     const resetPasswordCmd = vscode.commands.registerCommand('legacydoc.resetPassword', async () => {
-        // Etapa 1: Solicita apenas o e-mail imediatamente ao clicar no botão
         const email = await vscode.window.showInputBox({
             title: 'Recuperar Senha (1/4) — Informe seu E-mail',
             prompt: 'Digite o e-mail cadastrado para receber o código de validação',
@@ -155,7 +178,6 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (!email) return;
 
-        // Dispara o envio do e-mail na API
         try {
             await vscode.window.withProgress(
                 {
@@ -171,7 +193,6 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        // Etapa 2: Abre imediatamente o campo aguardando o código (mantém aberto ao trocar de janela)
         const tokenInput = await vscode.window.showInputBox({
             title: 'Recuperar Senha (2/4) — Código de Validação',
             prompt: `Código enviado para ${email.trim()}. Verifique seu e-mail e cole o código abaixo:`,
@@ -186,18 +207,17 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (!tokenInput) return;
 
-        // Caso o usuário cole um link completo do e-mail (ex: ?token=xyz), extrai apenas o código automaticamente
+        // Extrai apenas o token caso o usuário tenha colado uma URL inteira
         let cleanToken = tokenInput.trim();
         if (cleanToken.includes('token=')) {
             try {
                 const urlParams = new URLSearchParams(cleanToken.split('?')[1]);
                 cleanToken = urlParams.get('token') || cleanToken;
             } catch {
-                // Mantém o valor original se não for uma URL padrão
+                // Mantém o texto original se não for uma query string padrão
             }
         }
 
-        // Etapa 3: Nova Senha
         const newPassword = await vscode.window.showInputBox({
             title: 'Recuperar Senha (3/4) — Nova Senha',
             prompt: 'Digite sua nova senha',
@@ -212,7 +232,6 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (!newPassword) return;
 
-        // Etapa 4: Confirmação da Nova Senha
         const confirmNewPassword = await vscode.window.showInputBox({
             title: 'Recuperar Senha (4/4) — Confirmar Nova Senha',
             prompt: 'Digite novamente sua nova senha',
@@ -227,7 +246,6 @@ export async function activate(context: vscode.ExtensionContext) {
         });
         if (!confirmNewPassword) return;
 
-        // Confirma na API e já inicia a sessão automaticamente
         try {
             await vscode.window.withProgress(
                 {
@@ -254,14 +272,18 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // 2. Comando de Logout
+    // =========================================================================
+    // 4. COMANDO DE LOGOUT
+    // =========================================================================
     const logoutCmd = vscode.commands.registerCommand('legacydoc.logout', async () => {
         await apiClient.clearToken();
         await definirEstadoLogin(false);
         vscode.window.showInformationMessage('Sessão encerrada no Legacy Doc.');
     });
 
-    // 3. Comando para Gerar Markdown
+    // =========================================================================
+    // 5. COMANDOS DE GERAÇÃO / ATUALIZAÇÃO DE DOCUMENTAÇÃO (.MD e .PDF)
+    // =========================================================================
     const generateMdCmd = vscode.commands.registerCommand('legacydoc.generateMarkdown', async () => {
         const rootPath = validarRepositorioGit();
         if (!rootPath) return;
@@ -273,7 +295,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // 4. Comando para Gerar PDF
     const generatePdfCmd = vscode.commands.registerCommand('legacydoc.generatePdf', async () => {
         const rootPath = validarRepositorioGit();
         if (!rootPath) return;
@@ -285,28 +306,14 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // 5. Comando para Listar, Visualizar, Baixar e Deletar Documentações (/v1/documents)
-    const DELETED_DOCS_KEY = 'legacydoc.deletedDocumentIds';
+    // =========================================================================
+    // 6. COMANDO DE HISTÓRICO (Listar, Visualizar, Baixar e Excluir)
+    // =========================================================================
+    const removerDocumentacao = async (jobId: string, docPath: string) => {
+        // Deleta o registro no banco de dados via DELETE /v1/jobs/{job_id}/history
+        await apiClient.deleteJobRecord(jobId);
 
-    const removerDocumentacao = async (docId: string, docPath: string) => {
-        try {
-            // Tenta deletar diretamente na API
-            await apiClient.deleteDocument(docId);
-        } catch (err: any) {
-            // Se a rota DELETE /v1/documents/{id} ainda não existir no backend (404/405),
-            // registra o ID localmente para removê-lo da listagem da extensão
-            const msg = String(err.message || '');
-            if (msg.includes('405') || msg.includes('404')) {
-                const ocultos = context.globalState.get<string[]>(DELETED_DOCS_KEY, []);
-                if (!ocultos.includes(docId)) {
-                    await context.globalState.update(DELETED_DOCS_KEY, [...ocultos, docId]);
-                }
-            } else {
-                throw err;
-            }
-        }
-
-        // Se existir arquivo local gerado em docs_legacydoc/, remove do disco também
+        // Remove também o arquivo local em docs_legacydoc/ caso exista no workspace aberto
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (workspaceFolder) {
             const safeName = docPath.replace(/[\\/]/g, '_');
@@ -322,7 +329,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const listDocsCmd = vscode.commands.registerCommand('legacydoc.listDocuments', async () => {
         try {
-            const allDocs = await vscode.window.withProgress(
+            // Limpa eventual cache local de versões anteriores
+            await context.globalState.update('legacydoc.deletedDocumentIds', undefined);
+
+            const docs = await vscode.window.withProgress(
                 {
                     location: vscode.ProgressLocation.Notification,
                     title: 'Legacy Doc: Buscando histórico de documentações...'
@@ -332,20 +342,15 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
             );
 
-            // Filtra documentações que já foram excluídas
-            const deletedIds = new Set(context.globalState.get<string[]>(DELETED_DOCS_KEY, []));
-            const docs = (allDocs || []).filter(d => !deletedIds.has(d.id));
-
-            if (docs.length === 0) {
+            if (!docs || docs.length === 0) {
                 vscode.window.showInformationMessage('Nenhuma documentação disponível nesta conta.');
                 return;
             }
 
-            // Item especial no topo para exclusão em lote + lista de documentos
             const batchDeleteOption = {
                 label: '$(trash) Excluir Várias Documentações Antigas...',
-                description: 'Selecionar múltiplos registros para apagar de uma vez',
-                detail: 'Limpe documentações antigas do seu histórico',
+                description: 'Selecionar múltiplos registros para apagar do banco de dados',
+                detail: 'Remove as documentações selecionadas da conta (Extensão e Painel Web)',
                 isBatchDelete: true,
                 doc: undefined as any
             };
@@ -373,10 +378,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
             if (!selecionado) return;
 
-            // Fluxo 1: Exclusão em Lote (Múltipla escolha com checkboxes)
+            // Fluxo A: Exclusão em Lote
             if (selecionado.isBatchDelete) {
                 const paraExcluir = await vscode.window.showQuickPick(docItems, {
-                    title: 'Selecione as documentações antigas que deseja excluir',
+                    title: 'Selecione as documentações que deseja excluir permanentemente',
                     placeHolder: 'Marque os itens desejados e pressione Enter para confirmar',
                     canPickMany: true,
                     matchOnDescription: true
@@ -385,7 +390,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (!paraExcluir || paraExcluir.length === 0) return;
 
                 const confirmacao = await vscode.window.showWarningMessage(
-                    `Tem certeza que deseja excluir ${paraExcluir.length} documentação(ões)?`,
+                    `Tem certeza que deseja excluir permanentemente ${paraExcluir.length} documentação(ões)?`,
                     { modal: true },
                     'Sim, Excluir'
                 );
@@ -395,11 +400,16 @@ export async function activate(context: vscode.ExtensionContext) {
                 await vscode.window.withProgress(
                     {
                         location: vscode.ProgressLocation.Notification,
-                        title: 'Legacy Doc: Excluindo documentações selecionadas...'
+                        title: 'Legacy Doc: Excluindo documentações no servidor...'
                     },
                     async () => {
+                        const jobsProcessados = new Set<string>();
+
                         for (const item of paraExcluir) {
-                            await removerDocumentacao(item.doc.id, item.doc.path);
+                            if (!jobsProcessados.has(item.doc.job_id)) {
+                                await removerDocumentacao(item.doc.job_id, item.doc.path);
+                                jobsProcessados.add(item.doc.job_id);
+                            }
                         }
                     }
                 );
@@ -408,7 +418,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
-            // Fluxo 2: Ações para uma única documentação selecionada
+            // Fluxo B: Ações para um documento individual
             const acao = await vscode.window.showQuickPick(
                 [
                     {
@@ -428,7 +438,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     },
                     {
                         label: '$(trash) Excluir Documentação',
-                        description: 'Remove esta documentação do histórico e da pasta local',
+                        description: 'Remove permanentemente da conta e da pasta local',
                         id: 'delete'
                     }
                 ],
@@ -443,7 +453,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (acao.id === 'delete') {
                 const dataDoc = new Date(selecionado.doc.created_at).toLocaleString('pt-BR');
                 const confirmar = await vscode.window.showWarningMessage(
-                    `Deseja realmente excluir a documentação de "${selecionado.doc.path}" (${dataDoc})?`,
+                    `Deseja realmente excluir permanentemente a documentação de "${selecionado.doc.path}" (${dataDoc})?`,
                     { modal: true },
                     'Sim, Excluir'
                 );
@@ -456,7 +466,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         title: `Legacy Doc: Excluindo ${selecionado.doc.path}...`
                     },
                     async () => {
-                        await removerDocumentacao(selecionado.doc.id, selecionado.doc.path);
+                        await removerDocumentacao(selecionado.doc.job_id, selecionado.doc.path);
                     }
                 );
 
@@ -512,25 +522,25 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showErrorMessage(`Erro ao gerenciar documentações: ${err.message}`);
         }
     });
-    
+
     context.subscriptions.push(
         loginCmd,
         registerCmd,
         resetPasswordCmd,
-        listDocsCmd,
         logoutCmd,
         generateMdCmd,
-        generatePdfCmd
+        generatePdfCmd,
+        listDocsCmd
     );
 }
 
 /**
- * Testa o token salvo ao abrir o VS Code; se expirado ou inexistente, bloqueia a UI
+ * Verifica se há um token salvo ao iniciar o VS Code e valida sua vigência na API
  */
 async function validarSessaoInicial(
     apiClient: LegacyDocApiClient,
     definirEstadoLogin: (autenticado: boolean) => Promise<void>
-) {
+): Promise<void> {
     const token = await apiClient.getToken();
     if (!token) {
         await definirEstadoLogin(false);
@@ -541,12 +551,14 @@ async function validarSessaoInicial(
         await apiClient.getMe();
         await definirEstadoLogin(true);
     } catch {
-        // Token expirado ou revogado na API
         await apiClient.clearToken();
         await definirEstadoLogin(false);
     }
 }
 
+/**
+ * Garante que há uma pasta aberta no VS Code com um repositório Git inicializado (.git)
+ */
 function validarRepositorioGit(): string | undefined {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
@@ -560,3 +572,5 @@ function validarRepositorioGit(): string | undefined {
     }
     return rootPath;
 }
+
+export function deactivate() {}
