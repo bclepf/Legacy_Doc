@@ -3,6 +3,7 @@
   "displayName": "Legacy Doc",
   "description": "Documentação automática multi-linguagem com orquestração multi-agente.",
   "version": "0.0.1",
+  "icon": "media/logo.png",
   "engines": {
     "vscode": "^1.136.0"
   },
@@ -56,7 +57,7 @@
         {
           "id": "legacydoc-sidebar",
           "title": "Legacy Doc",
-          "icon": "$(book)"
+          "icon": "media/logo.png"
         }
       ]
     },
