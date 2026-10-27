@@ -6,7 +6,7 @@ import { DocumentationService } from './documentationService';
 
 export function activate(context: vscode.ExtensionContext) {
     const apiClient = new LegacyDocApiClient(context.secrets);
-    const docService = new DocumentationService(apiClient);
+    const docService = new DocumentationService(apiClient, context.workspaceState);
 
     // Registra uma árvore vazia para habilitar a tela de boas-vindas (viewsWelcome) na barra lateral
     vscode.window.registerTreeDataProvider('legacydoc.welcomeView', {

@@ -2,22 +2,54 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { LegacyDocApiClient } from './apiClient';
-import { GenerationDepth, JobResponse, ProjectResponse } from './types/api';
+import { DocumentSummaryResponse, GenerationDepth, JobResponse, ProjectResponse } from './types/api';
 
 const IGNORED_DIRS = new Set([
     '.git', 'node_modules', 'dist', 'build', 'out',
     '.venv', 'venv', '__pycache__', '.idea', '.vscode', 'docs_legacydoc'
 ]);
 
-// Extensões padrão de código-fonte (usadas como fallback caso /v1/meta/languages falhe)
 const DEFAULT_EXTENSIONS = new Set([
     '.c', '.cpp', '.cc', '.h', '.hpp',
     '.py', '.ts', '.tsx', '.js', '.jsx',
     '.java', '.cs', '.go', '.rs', '.php', '.rb', '.swift', '.kt'
 ]);
 
+const WORKSPACE_PROJECT_ID_KEY = 'legacydoc.workspace.projectId';
+
 export class DocumentationService {
-    constructor(private api: LegacyDocApiClient) {}
+    constructor(
+        private api: LegacyDocApiClient,
+        private workspaceState?: vscode.Memento
+    ) {}
+
+    /**
+     * Normaliza strings de nomes/slugs para evitar duplicação por maiúsculas, acentos ou símbolos
+     */
+    private normalizeIdentifier(value: string): string {
+        return value
+            .trim()
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+    }
+
+    /**
+     * Normaliza URLs do Git (HTTPS e SSH) para comparação consistente
+     */
+    private normalizeGitUrl(url: string | null | undefined): string | null {
+        if (!url) {
+            return null;
+        }
+        return url
+            .trim()
+            .toLowerCase()
+            .replace(/^git@([^:]+):/, 'https://$1/')
+            .replace(/\.git$/, '')
+            .replace(/\/+$/, '');
+    }
 
     /**
      * Lê a branch atual e a URL remota diretamente da pasta .git local
@@ -51,42 +83,88 @@ export class DocumentationService {
     }
 
     /**
-     * Verifica direto na API se o projeto já existe (pela URL do Git ou nome da pasta).
-     * Se existir, atualiza via PATCH /v1/projects/{id}; senão, cria via POST /v1/projects.
-     * Não gera nenhum arquivo extra no disco.
+     * Localiza o projeto existente (evitando criar projetos duplicados com o mesmo nome),
+     * remove eventuais duplicatas antigas e atualiza o projeto via PATCH /v1/projects/{id}.
      */
     private async resolveAndSyncProject(
         rootPath: string
     ): Promise<{ project: ProjectResponse; isExistingProject: boolean }> {
-        const projectName = path.basename(rootPath);
+        const projectName = path.basename(rootPath).trim();
+        const normalizedTargetName = this.normalizeIdentifier(projectName);
         const { repoUrl, defaultBranch } = this.getGitMetadata(rootPath);
+        const normalizedTargetUrl = this.normalizeGitUrl(repoUrl);
 
         const existingProjects = await this.api.listProjects();
+        const savedProjectId = this.workspaceState?.get<string>(WORKSPACE_PROJECT_ID_KEY);
 
-        // Procura projeto existente pela URL do repositório ou pelo nome da pasta
-        const matchedProject = existingProjects.find(p =>
-            (repoUrl && p.repo_url === repoUrl) ||
-            p.name.toLowerCase() === projectName.toLowerCase()
-        );
+        // Filtra todos os projetos da conta que correspondem a este workspace (por ID salvo, URL Git, nome ou slug)
+        const matchingProjects = existingProjects.filter((p) => {
+            if (savedProjectId && p.id === savedProjectId) {
+                return true;
+            }
+            const pUrl = this.normalizeGitUrl(p.repo_url);
+            if (normalizedTargetUrl && pUrl && pUrl === normalizedTargetUrl) {
+                return true;
+            }
+            const pName = this.normalizeIdentifier(p.name);
+            const pSlug = this.normalizeIdentifier(p.slug || '');
+            return pName === normalizedTargetName || pSlug === normalizedTargetName;
+        });
 
-        if (matchedProject) {
-            const project = await this.api.updateProject(matchedProject.id, {
+        if (matchingProjects.length > 0) {
+            // Ordena do mais antigo para o mais recente para manter o projeto original como principal
+            matchingProjects.sort(
+                (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+
+            const primaryProject = matchingProjects[0];
+            const duplicateProjects = matchingProjects.slice(1);
+
+            // Se já existiam projetos duplicados com o mesmo nome, migra/limpa as duplicatas
+            for (const dup of duplicateProjects) {
+                try {
+                    const dupDocs = await this.api.listDocuments({ project_id: dup.id, limit: 200 });
+                    const processedJobs = new Set<string>();
+                    for (const doc of dupDocs) {
+                        if (!processedJobs.has(doc.job_id)) {
+                            await this.api.deleteJobRecord(doc.job_id);
+                            processedJobs.add(doc.job_id);
+                        }
+                    }
+                    await this.api.deleteProject(dup.id);
+                } catch {
+                    // Continua mesmo que uma duplicata antiga não possa ser removida
+                }
+            }
+
+            // Atualiza o projeto existente via PATCH /v1/projects/{project_id}
+            const updatedProject = await this.api.updateProject(primaryProject.id, {
                 name: projectName,
-                repo_url: repoUrl ?? matchedProject.repo_url,
-                default_branch: defaultBranch ?? matchedProject.default_branch,
+                repo_url: repoUrl ?? primaryProject.repo_url,
+                default_branch: defaultBranch ?? primaryProject.default_branch,
                 description: `Atualizado via VS Code Extension em ${new Date().toLocaleString('pt-BR')}`
             });
-            return { project, isExistingProject: true };
+
+            if (this.workspaceState) {
+                await this.workspaceState.update(WORKSPACE_PROJECT_ID_KEY, updatedProject.id);
+            }
+
+            return { project: updatedProject, isExistingProject: true };
         }
 
-        const project = await this.api.createProject({
+        // Cria um novo projeto apenas se realmente não existir nenhum com este nome/repositório
+        const newProject = await this.api.createProject({
             name: projectName,
             repo_url: repoUrl,
             default_branch: defaultBranch,
             description: 'Gerado via VS Code Extension'
         });
 
-        return { project, isExistingProject: false };
+        if (this.workspaceState) {
+            await this.workspaceState.update(WORKSPACE_PROJECT_ID_KEY, newProject.id);
+        }
+
+        return { project: newProject, isExistingProject: false };
     }
 
     /**
@@ -97,14 +175,14 @@ export class DocumentationService {
 
         try {
             const langs = await this.api.getSupportedLanguages();
-            const apiExts = langs.flatMap(l =>
-                l.extensions.map(ext => (ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`))
+            const apiExts = langs.flatMap((l) =>
+                l.extensions.map((ext) => (ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`))
             );
             if (apiExts.length > 0) {
                 allowedExtensions = new Set(apiExts);
             }
         } catch {
-            // Usa lista padrão caso falhe
+            // Mantém lista padrão caso a consulta de metadados falhe
         }
 
         const files: Array<{ relativePath: string; content: string }> = [];
@@ -167,12 +245,12 @@ export class DocumentationService {
                 throw new Error(job.error_message || `O Job falhou com status: ${job.status}`);
             }
 
-            await new Promise(resolve => setTimeout(resolve, 2500));
+            await new Promise((resolve) => setTimeout(resolve, 2500));
         }
     }
 
     /**
-     * Sincroniza o projeto na API e gera/atualiza apenas os arquivos .md ou .pdf
+     * Sincroniza o projeto único na API, gera a documentação atualizada e substitui os registros antigos
      */
     async generateWorkspaceDocumentation(
         rootPath: string,
@@ -191,19 +269,32 @@ export class DocumentationService {
                     fs.mkdirSync(outputDir, { recursive: true });
                 }
 
-                // Se existir um .legacydoc.json antigo de testes anteriores, remove automaticamente
+                // Remove eventual arquivo .legacydoc.json legado
                 const oldConfigFile = path.join(outputDir, '.legacydoc.json');
                 if (fs.existsSync(oldConfigFile)) {
                     fs.unlinkSync(oldConfigFile);
                 }
 
-                progress.report({ message: 'Verificando registro do projeto na API...' });
+                progress.report({ message: 'Sincronizando projeto na API...' });
                 const { project, isExistingProject } = await this.resolveAndSyncProject(rootPath);
+
+                // Busca as documentações que já existiam neste projeto antes desta atualização
+                let previousDocs: DocumentSummaryResponse[] = [];
+                if (isExistingProject) {
+                    try {
+                        previousDocs = await this.api.listDocuments({
+                            project_id: project.id,
+                            limit: 200
+                        });
+                    } catch {
+                        previousDocs = [];
+                    }
+                }
 
                 progress.report({
                     message: isExistingProject
-                        ? `Projeto "${project.name}" detectado! Lendo arquivos para atualizar...`
-                        : `Novo projeto "${project.name}" criado! Lendo arquivos...`
+                        ? `Atualizando documentação do projeto "${project.name}"...`
+                        : `Gerando documentação para o novo projeto "${project.name}"...`
                 });
 
                 const sourceFiles = await this.collectSourceFiles(rootPath);
@@ -215,13 +306,14 @@ export class DocumentationService {
                 const ext = exportFormat === 'pdf' ? 'pdf' : 'md';
                 let updatedCount = 0;
                 let createdCount = 0;
+                const oldJobIdsToDelete = new Set<string>();
 
                 for (let i = 0; i < sourceFiles.length; i++) {
                     const file = sourceFiles[i];
                     const stepLabel = `${i + 1}/${sourceFiles.length}: ${file.relativePath}`;
 
                     progress.report({
-                        message: `${isExistingProject ? 'Atualizando' : 'Gerando'} ${stepLabel}...`
+                        message: `${isExistingProject ? 'Atualizando' : 'Documentando'} ${stepLabel}...`
                     });
 
                     const job = await this.api.createJob({
@@ -240,23 +332,34 @@ export class DocumentationService {
                         cancellationToken
                     );
 
-                    const docs = await this.api.listDocuments({
+                    const newDocs = await this.api.listDocuments({
                         job_id: finishedJob.id,
                         project_id: project.id,
                         limit: 50
                     });
 
-                    for (const docSummary of docs) {
+                    // Identifica documentações antigas do mesmo arquivo para substituí-las
+                    const matchingOldDocs = previousDocs.filter(
+                        (oldDoc) =>
+                            oldDoc.path.replace(/\\/g, '/') === file.relativePath &&
+                            oldDoc.job_id !== finishedJob.id
+                    );
+
+                    for (const oldDoc of matchingOldDocs) {
+                        oldJobIdsToDelete.add(oldDoc.job_id);
+                    }
+
+                    for (const docSummary of newDocs) {
                         const exportedBuffer = await this.api.exportDocument(docSummary.id, exportFormat);
                         const safeName = docSummary.path.replace(/[\\/]/g, '_');
                         const targetFile = path.join(outputDir, `${safeName}.${ext}`);
 
-                        const fileAlreadyExisted = fs.existsSync(targetFile);
+                        const existedBefore = fs.existsSync(targetFile) || matchingOldDocs.length > 0;
 
-                        // Sobrescreve diretamente o arquivo .md ou .pdf
+                        // Sobrescreve o arquivo local com a versão atualizada
                         fs.writeFileSync(targetFile, exportedBuffer);
 
-                        if (fileAlreadyExisted) {
+                        if (existedBefore) {
                             updatedCount++;
                         } else {
                             createdCount++;
@@ -264,17 +367,25 @@ export class DocumentationService {
                     }
                 }
 
-                if (updatedCount > 0 && createdCount === 0) {
+                // Remove do servidor as versões antigas que foram substituídas pela atualização
+                if (oldJobIdsToDelete.size > 0) {
+                    progress.report({ message: 'Limpando versões antigas substituídas...' });
+                    for (const oldJobId of oldJobIdsToDelete) {
+                        try {
+                            await this.api.deleteJobRecord(oldJobId);
+                        } catch {
+                            // Ignora caso o registro antigo já tenha sido removido
+                        }
+                    }
+                }
+
+                if (isExistingProject || updatedCount > 0) {
                     vscode.window.showInformationMessage(
-                        `Projeto "${project.name}" atualizado! ${updatedCount} documentação(ões) atualizada(s) em "docs_legacydoc".`
-                    );
-                } else if (updatedCount > 0 && createdCount > 0) {
-                    vscode.window.showInformationMessage(
-                        `Projeto "${project.name}" sincronizado! ${updatedCount} atualizada(s) e ${createdCount} nova(s) em "docs_legacydoc".`
+                        `Documentação do projeto "${project.name}" atualizada com sucesso! (${updatedCount + createdCount} arquivo(s) em "docs_legacydoc")`
                     );
                 } else {
                     vscode.window.showInformationMessage(
-                        `Documentação gerada para "${project.name}"! ${createdCount} arquivo(s) salvo(s) em "docs_legacydoc".`
+                        `Documentação do projeto "${project.name}" criada com sucesso! (${createdCount} arquivo(s) em "docs_legacydoc")`
                     );
                 }
             }
