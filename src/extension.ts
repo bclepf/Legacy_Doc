@@ -4,6 +4,7 @@ import * as path from 'path';
 import { LegacyDocApiClient } from './apiClient';
 import { DocumentationService } from './documentationService';
 import { UsageViewProvider } from './usageViewProvider';
+import { ContextKind } from './types/api';
 
 export function activate(context: vscode.ExtensionContext) {
     const apiClient = new LegacyDocApiClient(context.secrets);
@@ -349,6 +350,211 @@ export function activate(context: vscode.ExtensionContext) {
         }
     };
 
+    // =========================================================================
+    // 7. GERENCIAMENTO DE CONTEXTO DO PROJETO (.MD) (/v1/projects/{id}/context)
+    // =========================================================================
+    const addContextCmd = vscode.commands.registerCommand('legacydoc.addContext', async () => {
+        const rootPath = validarRepositorioGit();
+        if (!rootPath) return;
+
+        // Procura arquivos .md já presentes no repositório (ignorando node_modules e docs_legacydoc)
+        const mdUris = await vscode.workspace.findFiles(
+            '**/*.md',
+            '{**/node_modules/**,**/docs_legacydoc/**,**/.git/**}'
+        );
+
+        let selectedFileUri: vscode.Uri | undefined;
+
+        if (mdUris.length > 0) {
+            const quickPickItems = [
+                ...mdUris.map((uri) => {
+                    const relPath = path.relative(rootPath, uri.fsPath).replace(/\\/g, '/');
+                    return {
+                        label: `$(markdown) ${path.basename(uri.fsPath)}`,
+                        description: relPath,
+                        uri
+                    };
+                }),
+                {
+                    label: '$(folder-opened) Selecionar outro arquivo .md no computador...',
+                    description: 'Abrir explorador de arquivos',
+                    uri: undefined as vscode.Uri | undefined
+                }
+            ];
+
+            const picked = await vscode.window.showQuickPick(quickPickItems, {
+                title: 'Adicionar Contexto (.md) ao Projeto',
+                placeHolder: 'Escolha um arquivo .md do projeto ou procure no computador'
+            });
+
+            if (!picked) return;
+            selectedFileUri = picked.uri;
+        }
+
+        // Se não havia .md no projeto ou o usuário escolheu procurar no computador
+        if (!selectedFileUri) {
+            const openedUris = await vscode.window.showOpenDialog({
+                canSelectMany: false,
+                defaultUri: vscode.Uri.file(rootPath),
+                openLabel: 'Adicionar Contexto (.md)',
+                filters: {
+                    'Markdown (*.md)': ['md', 'markdown']
+                }
+            });
+
+            if (!openedUris || openedUris.length === 0) return;
+            selectedFileUri = openedUris[0];
+        }
+
+        // Lê e valida o conteúdo conforme limites do schema ContextItemCreateRequest (1 a 20.000 caracteres)
+        const rawContent = fs.readFileSync(selectedFileUri.fsPath, 'utf-8').trim();
+        if (!rawContent) {
+            vscode.window.showWarningMessage('O arquivo .md selecionado está vazio.');
+            return;
+        }
+
+        let finalContent = rawContent;
+        if (rawContent.length > 20000) {
+            const confirmarCorte = await vscode.window.showWarningMessage(
+                `O arquivo possui ${rawContent.length} caracteres, mas o limite da API é de 20.000 caracteres por contexto. Deseja enviar os primeiros 20.000 caracteres?`,
+                { modal: true },
+                'Sim, Enviar'
+            );
+            if (confirmarCorte !== 'Sim, Enviar') return;
+            finalContent = rawContent.slice(0, 20000);
+        }
+
+        // Seleciona o tipo de contexto aceito pela API
+        const kindSelection = await vscode.window.showQuickPick(
+            [
+                { label: 'Arquitetura (architecture)', value: 'architecture' as ContextKind, detail: 'Visão geral de componentes, módulos e fluxo de dados' },
+                { label: 'Regra de Domínio (domain_rule)', value: 'domain_rule' as ContextKind, detail: 'Regras de negócio e restrições do sistema' },
+                { label: 'Convenção de Código (convention)', value: 'convention' as ContextKind, detail: 'Padrões de nomenclatura e boas práticas do projeto' },
+                { label: 'Glossário (glossary)', value: 'glossary' as ContextKind, detail: 'Termos técnicos, siglas e definições do domínio' },
+                { label: 'Dependências (dependency)', value: 'dependency' as ContextKind, detail: 'Bibliotecas externas, hardware e integrações' },
+                { label: 'Livre / Geral (freeform)', value: 'freeform' as ContextKind, detail: 'README ou contexto geral em formato livre' }
+            ],
+            {
+                title: 'Classificação do Contexto',
+                placeHolder: 'Selecione a categoria que melhor descreve este arquivo .md'
+            }
+        );
+
+        if (!kindSelection) return;
+
+        const fileName = path.basename(selectedFileUri.fsPath);
+        const title = fileName.slice(0, 200);
+
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: `Legacy Doc: Anexando contexto "${title}" ao projeto...`
+                },
+                async () => {
+                    const { project } = await docService.resolveAndSyncProject(rootPath);
+
+                    // Se já existir um item de contexto com o mesmo título no projeto, substitui para evitar duplicata
+                    const existingContexts = await apiClient.listProjectContext(project.id);
+                    const duplicate = existingContexts.find(
+                        (c) => c.title.toLowerCase() === title.toLowerCase()
+                    );
+                    if (duplicate) {
+                        await apiClient.deleteProjectContext(project.id, duplicate.id);
+                    }
+
+                    await apiClient.addProjectContext(project.id, {
+                        kind: kindSelection.value,
+                        title,
+                        content: finalContent,
+                        weight: 100
+                    });
+
+                    vscode.window.showInformationMessage(
+                        `Contexto "${title}" (${kindSelection.value}) adicionado com sucesso ao projeto "${project.name}"!`
+                    );
+                }
+            );
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Erro ao adicionar contexto: ${err.message}`);
+        }
+    });
+
+    const removeContextCmd = vscode.commands.registerCommand('legacydoc.removeContext', async () => {
+        const rootPath = validarRepositorioGit();
+        if (!rootPath) return;
+
+        try {
+            const project = await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Consultando contextos ativos do projeto...'
+                },
+                async () => await docService.findExistingProject(rootPath)
+            );
+
+            if (!project) {
+                vscode.window.showInformationMessage('Este repositório ainda não possui nenhum contexto cadastrado.');
+                return;
+            }
+
+            const contexts = await apiClient.listProjectContext(project.id);
+            if (!contexts || contexts.length === 0) {
+                vscode.window.showInformationMessage(
+                    `O projeto "${project.name}" não possui nenhum arquivo de contexto ativo no momento.`
+                );
+                return;
+            }
+
+            const items = contexts.map((ctx) => {
+                const data = new Date(ctx.created_at).toLocaleString('pt-BR');
+                const preview = ctx.content.replace(/\s+/g, ' ').slice(0, 90);
+                return {
+                    label: `$(markdown) ${ctx.title}`,
+                    description: `${ctx.kind} • Adicionado em ${data}`,
+                    detail: `${preview}${ctx.content.length > 90 ? '...' : ''}`,
+                    ctx
+                };
+            });
+
+            const selecionados = await vscode.window.showQuickPick(items, {
+                title: `Remover Contexto do Projeto "${project.name}" (${contexts.length} ativo(s))`,
+                placeHolder: 'Marque o(s) arquivo(s) de contexto que deseja remover do uso atual',
+                canPickMany: true,
+                matchOnDescription: true,
+                matchOnDetail: true
+            });
+
+            if (!selecionados || selecionados.length === 0) return;
+
+            const confirmar = await vscode.window.showWarningMessage(
+                `Deseja remover ${selecionados.length} arquivo(s) de contexto do projeto "${project.name}"?`,
+                { modal: true },
+                'Sim, Remover'
+            );
+
+            if (confirmar !== 'Sim, Remover') return;
+
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Removendo contexto do projeto...'
+                },
+                async () => {
+                    for (const item of selecionados) {
+                        await apiClient.deleteProjectContext(project.id, item.ctx.id);
+                    }
+                }
+            );
+
+            vscode.window.showInformationMessage(
+                `${selecionados.length} contexto(s) removido(s) do projeto "${project.name}".`
+            );
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Erro ao remover contexto: ${err.message}`);
+        }
+    });
+
     const listDocsCmd = vscode.commands.registerCommand('legacydoc.listDocuments', async () => {
         try {
             // Limpa eventual cache local de versões anteriores
@@ -553,7 +759,9 @@ export function activate(context: vscode.ExtensionContext) {
         generateMdCmd,
         generatePdfCmd,
         listDocsCmd,
-        refreshUsageCmd
+        refreshUsageCmd,
+        addContextCmd,
+        removeContextCmd
     );
 }
 

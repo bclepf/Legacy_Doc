@@ -83,11 +83,45 @@ export class DocumentationService {
         return { repoUrl, defaultBranch };
     }
 
-    /**
-     * Localiza o projeto existente (evitando criar projetos duplicados com o mesmo nome),
-     * remove eventuais duplicatas antigas e atualiza o projeto via PATCH /v1/projects/{id}.
+/**
+     * Busca o projeto correspondente ao repositório local na API sem criar um novo
      */
-    private async resolveAndSyncProject(
+    public async findExistingProject(rootPath: string): Promise<ProjectResponse | undefined> {
+        const projectName = path.basename(rootPath).trim();
+        const normalizedTargetName = this.normalizeIdentifier(projectName);
+        const { repoUrl } = this.getGitMetadata(rootPath);
+        const normalizedTargetUrl = this.normalizeGitUrl(repoUrl);
+
+        const existingProjects = await this.api.listProjects();
+        const savedProjectId = this.workspaceState?.get<string>(WORKSPACE_PROJECT_ID_KEY);
+
+        const matchingProjects = existingProjects.filter((p) => {
+            if (savedProjectId && p.id === savedProjectId) {
+                return true;
+            }
+            const pUrl = this.normalizeGitUrl(p.repo_url);
+            if (normalizedTargetUrl && pUrl && pUrl === normalizedTargetUrl) {
+                return true;
+            }
+            const pName = this.normalizeIdentifier(p.name);
+            const pSlug = this.normalizeIdentifier(p.slug || '');
+            return pName === normalizedTargetName || pSlug === normalizedTargetName;
+        });
+
+        if (matchingProjects.length === 0) {
+            return undefined;
+        }
+
+        matchingProjects.sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        return matchingProjects[0];
+    }
+
+    /**
+     * Localiza o projeto existente ou cria um novo (Mude de 'private' para 'public')
+     */
+    public async resolveAndSyncProject(
         rootPath: string
     ): Promise<{ project: ProjectResponse; isExistingProject: boolean }> {
         const projectName = path.basename(rootPath).trim();

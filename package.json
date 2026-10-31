@@ -32,6 +32,16 @@
         "icon": "$(unlock)"
       },
       {
+        "command": "legacydoc.addContext",
+        "title": "Legacy Doc: Adicionar Arquivo de Contexto (.md)",
+        "icon": "$(note)"
+      },
+      {
+        "command": "legacydoc.removeContext",
+        "title": "Legacy Doc: Remover Contexto do Projeto",
+        "icon": "$(close-all)"
+      },
+      {
         "command": "legacydoc.listDocuments",
         "title": "Legacy Doc: Minhas Documentações Geradas",
         "icon": "$(history)"
@@ -93,7 +103,7 @@
       },
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Repositório Git detectado! Escolha o formato para documentar seu código:\n[$(markdown) Gerar Documentação (.md)](command:legacydoc.generateMarkdown)\n[$(file-pdf) Gerar Documentação (.pdf)](command:legacydoc.generatePdf)\n\n---\nHistórico e Sessão:\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
+        "contents": "Repositório Git detectado! Escolha o formato para documentar seu código:\n[$(markdown) Gerar Documentação (.md)](command:legacydoc.generateMarkdown)\n[$(file-pdf) Gerar Documentação (.pdf)](command:legacydoc.generatePdf)\n\n---\nContexto do Projeto (.md):\n[$(note) Adicionar Contexto (.md)](command:legacydoc.addContext)\n[$(close-all) Remover Contexto Atual](command:legacydoc.removeContext)\n\n---\nHistórico e Sessão:\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
         "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount > 0"
       }
     ],
@@ -110,6 +120,14 @@
         {
           "command": "legacydoc.resetPassword",
           "when": "!legacydoc.isAuthenticated"
+        },
+        {
+          "command": "legacydoc.addContext",
+          "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount > 0"
+        },
+        {
+          "command": "legacydoc.removeContext",
+          "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount > 0"
         },
         {
           "command": "legacydoc.listDocuments",
