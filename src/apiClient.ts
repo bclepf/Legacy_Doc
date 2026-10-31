@@ -135,21 +135,6 @@ export class LegacyDocApiClient {
         return res;
     }
 
-    async listApiKeys(): Promise<ApiKeyResponse[]> {
-        return await this.request<ApiKeyResponse[]>('/v1/auth/api-keys', { method: 'GET' });
-    }
-
-    async createApiKey(data: ApiKeyCreateRequest): Promise<ApiKeyCreatedResponse> {
-        return await this.request<ApiKeyCreatedResponse>('/v1/auth/api-keys', {
-            method: 'POST',
-            body: JSON.stringify(data)
-        });
-    }
-
-    async revokeApiKey(keyId: string): Promise<void> {
-        await this.request<void>(`/v1/auth/api-keys/${keyId}`, { method: 'DELETE' });
-    }
-
     // ==========================================
     // 2. PROJETOS E CONTEXTO (/v1/projects/*)
     // ==========================================

@@ -47,51 +47,53 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     // =========================================================================
-    // 1. COMANDO DE LOGIN (E-mail/Senha ou API Key)
+    // 1. COMANDO DE LOGIN (Exclusivo via E-mail e Senha)
     // =========================================================================
     const loginCmd = vscode.commands.registerCommand('legacydoc.login', async () => {
-        const metodo = await vscode.window.showQuickPick(
-            ['Entrar com E-mail e Senha', 'Inserir API Key (Longa Duração)'],
-            { placeHolder: 'Escolha como deseja autenticar no Legacy Doc' }
-        );
+        const email = await vscode.window.showInputBox({
+            title: 'Entrar no Legacy Doc (1/2)',
+            prompt: 'Digite seu e-mail',
+            placeHolder: 'seu@email.com',
+            ignoreFocusOut: true,
+            validateInput: (val) => {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!val || !emailRegex.test(val.trim())) {
+                    return 'Informe um endereço de e-mail válido.';
+                }
+                return null;
+            }
+        });
+        if (!email) return;
 
-        if (!metodo) return;
+        const password = await vscode.window.showInputBox({
+            title: 'Entrar no Legacy Doc (2/2)',
+            prompt: 'Digite sua senha',
+            password: true,
+            ignoreFocusOut: true,
+            validateInput: (val) => {
+                if (!val) {
+                    return 'A senha não pode estar vazia.';
+                }
+                return null;
+            }
+        });
+        if (!password) return;
 
         try {
-            if (metodo.startsWith('Inserir API Key')) {
-                const apiKey = await vscode.window.showInputBox({
-                    prompt: 'Cole sua API Key do Legacy Doc',
-                    password: true,
-                    ignoreFocusOut: true
-                });
-                if (!apiKey) return;
-
-                await apiClient.setToken(apiKey.trim());
-                const user = await apiClient.getMe();
-                await definirEstadoLogin(true);
-                vscode.window.showInformationMessage(
-                    `Autenticado como ${user.email} (Plano: ${user.plan.display_name})`
-                );
-            } else {
-                const email = await vscode.window.showInputBox({
-                    prompt: 'Digite seu e-mail',
-                    placeHolder: 'seu@email.com',
-                    ignoreFocusOut: true
-                });
-                if (!email) return;
-
-                const password = await vscode.window.showInputBox({
-                    prompt: 'Digite sua senha',
-                    password: true,
-                    ignoreFocusOut: true
-                });
-                if (!password) return;
-
-                await apiClient.login({ email: email.trim(), password });
-                const user = await apiClient.getMe();
-                await definirEstadoLogin(true);
-                vscode.window.showInformationMessage(`Bem-vindo, ${user.display_name || user.email}!`);
-            }
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Legacy Doc: Autenticando...'
+                },
+                async () => {
+                    await apiClient.login({ email: email.trim(), password });
+                    const user = await apiClient.getMe();
+                    await definirEstadoLogin(true);
+                    vscode.window.showInformationMessage(
+                        `Bem-vindo(a), ${user.display_name || user.email}! (Plano: ${user.plan.display_name})`
+                    );
+                }
+            );
         } catch (err: any) {
             await apiClient.clearToken();
             await definirEstadoLogin(false);
