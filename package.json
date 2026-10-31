@@ -18,7 +18,7 @@
     "commands": [
       {
         "command": "legacydoc.login",
-        "title": "Legacy Doc: Login / API Key",
+        "title": "Legacy Doc: Configurar Login / API Key",
         "icon": "$(key)"
       },
       {
@@ -35,6 +35,11 @@
         "command": "legacydoc.listDocuments",
         "title": "Legacy Doc: Minhas Documentações Geradas",
         "icon": "$(history)"
+      },
+      {
+        "command": "legacydoc.refreshUsage",
+        "title": "Legacy Doc: Atualizar Saldo de Créditos",
+        "icon": "$(refresh)"
       },
       {
         "command": "legacydoc.logout",
@@ -64,6 +69,12 @@
     "views": {
       "legacydoc-sidebar": [
         {
+          "id": "legacydoc.usageView",
+          "name": "Consumo de Créditos",
+          "type": "webview",
+          "when": "legacydoc.isAuthenticated"
+        },
+        {
           "id": "legacydoc.welcomeView",
           "name": "Gerador de Documentação"
         }
@@ -72,7 +83,7 @@
     "viewsWelcome": [
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)\n[$(unlock) Esqueci Minha Senha](command:legacydoc.resetPassword)",
+        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Configurar Login / API Key](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)\n[$(unlock) Esqueci Minha Senha](command:legacydoc.resetPassword)",
         "when": "!legacydoc.isAuthenticated"
       },
       {
@@ -105,6 +116,10 @@
           "when": "legacydoc.isAuthenticated"
         },
         {
+          "command": "legacydoc.refreshUsage",
+          "when": "legacydoc.isAuthenticated"
+        },
+        {
           "command": "legacydoc.logout",
           "when": "legacydoc.isAuthenticated"
         },
@@ -118,6 +133,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "legacydoc.refreshUsage",
+          "when": "view == legacydoc.usageView && legacydoc.isAuthenticated",
+          "group": "navigation@1"
+        },
         {
           "command": "legacydoc.generateMarkdown",
           "when": "view == legacydoc.welcomeView && legacydoc.isAuthenticated && gitOpenRepositoryCount > 0",

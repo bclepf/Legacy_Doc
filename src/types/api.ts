@@ -50,12 +50,43 @@ export interface PlanInfo {
     tier: string;
     display_name: string;
     monthly_job_quota: number;
-    monthly_cost_limit_usd: number;
+    price_brl: number;
+    credits_brl: number;
     max_files_per_job: number;
     max_concurrent_jobs: number;
     features: string[];
     max_depth: string;
     available_depths?: string[];
+}
+
+// --- Usage & Credits (/v1/usage) ---
+export interface UsagePack {
+    price_brl: number;
+    credits_brl: number;
+}
+
+export interface UsageTopup {
+    credits_brl: number;
+    remaining_brl: number;
+    expires_at: string;
+}
+
+export interface UsageResponse {
+    plan_tier: string;
+    plan_name: string;
+    plan_price_brl: number;
+    credits_total_brl: number;
+    credits_remaining_brl: number;
+    plan_credits_remaining_brl: number;
+    percent_used: number;
+    near_limit: boolean;
+    exhausted: boolean;
+    period_start: string;
+    renews_at: string;
+    jobs_used_this_month: number;
+    monthly_job_quota: number;
+    topups: UsageTopup[];
+    packs: UsagePack[];
 }
 
 export interface UserResponse {

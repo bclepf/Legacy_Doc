@@ -20,7 +20,8 @@ const WORKSPACE_PROJECT_ID_KEY = 'legacydoc.workspace.projectId';
 export class DocumentationService {
     constructor(
         private api: LegacyDocApiClient,
-        private workspaceState?: vscode.Memento
+        private workspaceState?: vscode.Memento,
+        private onUsageUpdated?: () => Promise<void>
     ) {}
 
     /**
@@ -257,6 +258,17 @@ export class DocumentationService {
         exportFormat: 'markdown' | 'pdf',
         depth: GenerationDepth = 'standard'
     ): Promise<void> {
+        // Atualiza e verifica o saldo na API antes de iniciar um novo Job
+        const currentUsage = await this.api.getUsage();
+        if (this.onUsageUpdated) {
+            await this.onUsageUpdated();
+        }
+        if (currentUsage.exhausted) {
+            throw new Error(
+                `Saldo de créditos esgotado (R$ ${currentUsage.credits_remaining_brl.toFixed(2)} restantes). Recarregue seus créditos para gerar novas documentações.`
+            );
+        }
+
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -264,129 +276,135 @@ export class DocumentationService {
                 cancellable: true
             },
             async (progress, cancellationToken) => {
-                const outputDir = path.join(rootPath, 'docs_legacydoc');
-                if (!fs.existsSync(outputDir)) {
-                    fs.mkdirSync(outputDir, { recursive: true });
-                }
-
-                // Remove eventual arquivo .legacydoc.json legado
-                const oldConfigFile = path.join(outputDir, '.legacydoc.json');
-                if (fs.existsSync(oldConfigFile)) {
-                    fs.unlinkSync(oldConfigFile);
-                }
-
-                progress.report({ message: 'Sincronizando projeto na API...' });
-                const { project, isExistingProject } = await this.resolveAndSyncProject(rootPath);
-
-                // Busca as documentações que já existiam neste projeto antes desta atualização
-                let previousDocs: DocumentSummaryResponse[] = [];
-                if (isExistingProject) {
-                    try {
-                        previousDocs = await this.api.listDocuments({
-                            project_id: project.id,
-                            limit: 200
-                        });
-                    } catch {
-                        previousDocs = [];
+                try {
+                    const outputDir = path.join(rootPath, 'docs_legacydoc');
+                    if (!fs.existsSync(outputDir)) {
+                        fs.mkdirSync(outputDir, { recursive: true });
                     }
-                }
 
-                progress.report({
-                    message: isExistingProject
-                        ? `Atualizando documentação do projeto "${project.name}"...`
-                        : `Gerando documentação para o novo projeto "${project.name}"...`
-                });
+                    const oldConfigFile = path.join(outputDir, '.legacydoc.json');
+                    if (fs.existsSync(oldConfigFile)) {
+                        fs.unlinkSync(oldConfigFile);
+                    }
 
-                const sourceFiles = await this.collectSourceFiles(rootPath);
-                if (sourceFiles.length === 0) {
-                    vscode.window.showWarningMessage('Nenhum arquivo de código-fonte suportado foi encontrado na pasta.');
-                    return;
-                }
+                    progress.report({ message: 'Sincronizando projeto na API...' });
+                    const { project, isExistingProject } = await this.resolveAndSyncProject(rootPath);
 
-                const ext = exportFormat === 'pdf' ? 'pdf' : 'md';
-                let updatedCount = 0;
-                let createdCount = 0;
-                const oldJobIdsToDelete = new Set<string>();
-
-                for (let i = 0; i < sourceFiles.length; i++) {
-                    const file = sourceFiles[i];
-                    const stepLabel = `${i + 1}/${sourceFiles.length}: ${file.relativePath}`;
+                    let previousDocs: DocumentSummaryResponse[] = [];
+                    if (isExistingProject) {
+                        try {
+                            previousDocs = await this.api.listDocuments({
+                                project_id: project.id,
+                                limit: 200
+                            });
+                        } catch {
+                            previousDocs = [];
+                        }
+                    }
 
                     progress.report({
-                        message: `${isExistingProject ? 'Atualizando' : 'Documentando'} ${stepLabel}...`
+                        message: isExistingProject
+                            ? `Atualizando documentação do projeto "${project.name}"...`
+                            : `Gerando documentação para o novo projeto "${project.name}"...`
                     });
 
-                    const job = await this.api.createJob({
-                        job_type: 'document_snippet',
-                        path: file.relativePath,
-                        content: file.content,
-                        project_id: project.id,
-                        output_language: 'pt-BR',
-                        depth
-                    });
-
-                    const finishedJob = await this.pollJobUntilFinished(
-                        job.id,
-                        stepLabel,
-                        progress,
-                        cancellationToken
-                    );
-
-                    const newDocs = await this.api.listDocuments({
-                        job_id: finishedJob.id,
-                        project_id: project.id,
-                        limit: 50
-                    });
-
-                    // Identifica documentações antigas do mesmo arquivo para substituí-las
-                    const matchingOldDocs = previousDocs.filter(
-                        (oldDoc) =>
-                            oldDoc.path.replace(/\\/g, '/') === file.relativePath &&
-                            oldDoc.job_id !== finishedJob.id
-                    );
-
-                    for (const oldDoc of matchingOldDocs) {
-                        oldJobIdsToDelete.add(oldDoc.job_id);
+                    const sourceFiles = await this.collectSourceFiles(rootPath);
+                    if (sourceFiles.length === 0) {
+                        vscode.window.showWarningMessage('Nenhum arquivo de código-fonte suportado foi encontrado na pasta.');
+                        return;
                     }
 
-                    for (const docSummary of newDocs) {
-                        const exportedBuffer = await this.api.exportDocument(docSummary.id, exportFormat);
-                        const safeName = docSummary.path.replace(/[\\/]/g, '_');
-                        const targetFile = path.join(outputDir, `${safeName}.${ext}`);
+                    const ext = exportFormat === 'pdf' ? 'pdf' : 'md';
+                    let updatedCount = 0;
+                    let createdCount = 0;
+                    const oldJobIdsToDelete = new Set<string>();
 
-                        const existedBefore = fs.existsSync(targetFile) || matchingOldDocs.length > 0;
+                    for (let i = 0; i < sourceFiles.length; i++) {
+                        const file = sourceFiles[i];
+                        const stepLabel = `${i + 1}/${sourceFiles.length}: ${file.relativePath}`;
 
-                        // Sobrescreve o arquivo local com a versão atualizada
-                        fs.writeFileSync(targetFile, exportedBuffer);
+                        progress.report({
+                            message: `${isExistingProject ? 'Atualizando' : 'Documentando'} ${stepLabel}...`
+                        });
 
-                        if (existedBefore) {
-                            updatedCount++;
-                        } else {
-                            createdCount++;
+                        const job = await this.api.createJob({
+                            job_type: 'document_snippet',
+                            path: file.relativePath,
+                            content: file.content,
+                            project_id: project.id,
+                            output_language: 'pt-BR',
+                            depth
+                        });
+
+                        const finishedJob = await this.pollJobUntilFinished(
+                            job.id,
+                            stepLabel,
+                            progress,
+                            cancellationToken
+                        );
+
+                        // Atualiza a barra de créditos em tempo real assim que o arquivo termina de ser processado
+                        if (this.onUsageUpdated) {
+                            await this.onUsageUpdated();
+                        }
+
+                        const newDocs = await this.api.listDocuments({
+                            job_id: finishedJob.id,
+                            project_id: project.id,
+                            limit: 50
+                        });
+
+                        const matchingOldDocs = previousDocs.filter(
+                            (oldDoc) =>
+                                oldDoc.path.replace(/\\/g, '/') === file.relativePath &&
+                                oldDoc.job_id !== finishedJob.id
+                        );
+
+                        for (const oldDoc of matchingOldDocs) {
+                            oldJobIdsToDelete.add(oldDoc.job_id);
+                        }
+
+                        for (const docSummary of newDocs) {
+                            const exportedBuffer = await this.api.exportDocument(docSummary.id, exportFormat);
+                            const safeName = docSummary.path.replace(/[\\/]/g, '_');
+                            const targetFile = path.join(outputDir, `${safeName}.${ext}`);
+
+                            const existedBefore = fs.existsSync(targetFile) || matchingOldDocs.length > 0;
+                            fs.writeFileSync(targetFile, exportedBuffer);
+
+                            if (existedBefore) {
+                                updatedCount++;
+                            } else {
+                                createdCount++;
+                            }
                         }
                     }
-                }
 
-                // Remove do servidor as versões antigas que foram substituídas pela atualização
-                if (oldJobIdsToDelete.size > 0) {
-                    progress.report({ message: 'Limpando versões antigas substituídas...' });
-                    for (const oldJobId of oldJobIdsToDelete) {
-                        try {
-                            await this.api.deleteJobRecord(oldJobId);
-                        } catch {
-                            // Ignora caso o registro antigo já tenha sido removido
+                    if (oldJobIdsToDelete.size > 0) {
+                        progress.report({ message: 'Limpando versões antigas substituídas...' });
+                        for (const oldJobId of oldJobIdsToDelete) {
+                            try {
+                                await this.api.deleteJobRecord(oldJobId);
+                            } catch {
+                                // Ignora se já removido
+                            }
                         }
                     }
-                }
 
-                if (isExistingProject || updatedCount > 0) {
-                    vscode.window.showInformationMessage(
-                        `Documentação do projeto "${project.name}" atualizada com sucesso! (${updatedCount + createdCount} arquivo(s) em "docs_legacydoc")`
-                    );
-                } else {
-                    vscode.window.showInformationMessage(
-                        `Documentação do projeto "${project.name}" criada com sucesso! (${createdCount} arquivo(s) em "docs_legacydoc")`
-                    );
+                    if (isExistingProject || updatedCount > 0) {
+                        vscode.window.showInformationMessage(
+                            `Documentação do projeto "${project.name}" atualizada com sucesso! (${updatedCount + createdCount} arquivo(s) em "docs_legacydoc")`
+                        );
+                    } else {
+                        vscode.window.showInformationMessage(
+                            `Documentação do projeto "${project.name}" criada com sucesso! (${createdCount} arquivo(s) em "docs_legacydoc")`
+                        );
+                    }
+                } finally {
+                    // Garante que a barra de consumo reflita o estado mais recente da API ao encerrar
+                    if (this.onUsageUpdated) {
+                        await this.onUsageUpdated();
+                    }
                 }
             }
         );

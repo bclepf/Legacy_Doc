@@ -21,7 +21,8 @@ import {
     ProjectUpdateRequest,
     RegisterRequest,
     TokenResponse,
-    UserResponse
+    UserResponse,
+    UsageResponse
 } from './types/api';
 
 const BASE_URL = 'https://api.legacydoc.com.br';
@@ -330,4 +331,12 @@ export class LegacyDocApiClient {
     async checkHealth(): Promise<Record<string, string>> {
         return await this.request<Record<string, string>>('/health', { method: 'GET' }, false);
     }
+    
+    // ==========================================
+    // 6. USO E CRÉDITOS (/v1/usage)
+    // ==========================================
+    async getUsage(): Promise<UsageResponse> {
+        return await this.request<UsageResponse>('/v1/usage', { method: 'GET' });
+    }
+
 }

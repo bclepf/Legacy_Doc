@@ -3,25 +3,47 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { LegacyDocApiClient } from './apiClient';
 import { DocumentationService } from './documentationService';
+import { UsageViewProvider } from './usageViewProvider';
 
 export function activate(context: vscode.ExtensionContext) {
     const apiClient = new LegacyDocApiClient(context.secrets);
-    const docService = new DocumentationService(apiClient, context.workspaceState);
+    const usageProvider = new UsageViewProvider(apiClient);
 
-    // Registra uma árvore vazia para habilitar a tela de boas-vindas (viewsWelcome) na barra lateral
+    // Passa o callback para atualizar a barra de créditos sempre que uma documentação for gerada
+    const docService = new DocumentationService(
+        apiClient,
+        context.workspaceState,
+        async () => {
+            await usageProvider.refresh();
+        }
+    );
+
+    // Registra o Webview da barra de consumo de créditos
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(UsageViewProvider.viewType, usageProvider),
+        usageProvider
+    );
+
+    // Registra a árvore vazia para os botões do viewsWelcome
     vscode.window.registerTreeDataProvider('legacydoc.welcomeView', {
         getTreeItem: (element: vscode.TreeItem) => element,
         getChildren: () => []
     });
 
-    // Atualiza a variável de contexto no VS Code para alternar os botões da interface
+    // Atualiza o estado de login e sincroniza automaticamente a barra de créditos com a API
     const definirEstadoLogin = async (autenticado: boolean) => {
         await vscode.commands.executeCommand('setContext', 'legacydoc.isAuthenticated', autenticado);
+        if (autenticado) {
+            await usageProvider.refresh();
+        } else {
+            usageProvider.clear();
+        }
     };
 
-    // Inicializa o estado e valida a sessão em segundo plano sem bloquear a abertura da janela
-    definirEstadoLogin(false);
-    validarSessaoInicial(apiClient, definirEstadoLogin);
+    // Comando para atualizar manualmente o saldo caso o usuário faça uma recarga no painel web
+    const refreshUsageCmd = vscode.commands.registerCommand('legacydoc.refreshUsage', async () => {
+        await usageProvider.refresh();
+    });
 
     // =========================================================================
     // 1. COMANDO DE LOGIN (E-mail/Senha ou API Key)
@@ -530,7 +552,8 @@ export function activate(context: vscode.ExtensionContext) {
         logoutCmd,
         generateMdCmd,
         generatePdfCmd,
-        listDocsCmd
+        listDocsCmd,
+        refreshUsageCmd
     );
 }
 
