@@ -806,4 +806,6 @@ function validarRepositorioGit(): string | undefined {
     return rootPath;
 }
 
+
+
 export function deactivate() {}

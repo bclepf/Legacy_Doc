@@ -151,14 +151,14 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
                         margin-bottom: 6px;
                     }
                     .plan-badge {
-                        font-size: 11px;
-                        font-weight: 600;
-                        padding: 2px 6px;
-                        border-radius: 4px;
-                        background: var(--vscode-badge-background);
-                        color: var(--vscode-badge-foreground);
-                        text-transform: uppercase;
-                    }
+                    font-size: 10px;
+                    font-weight: 700;
+                    padding: 6px 10px;
+                    border-radius: 999px;
+                    background: #0e639c;
+                    color: white;
+                    text-transform: uppercase;
+                }
                     .remaining-highlight {
                         font-size: 13px;
                         font-weight: bold;
@@ -200,31 +200,72 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
                         background: rgba(241, 76, 76, 0.15);
                         border: 1px solid var(--vscode-errorForeground, #f14c4c);
                     }
+                    .balance-title {
+                    font-size: 11px;
+                    text-transform: uppercase;
+                    opacity: .8;
+                    margin-bottom: 4px;
+                    }
+
+                    .balance-value {
+                    font-size: 28px;
+                    font-weight: 700;
+                    color: var(--vscode-textLink-foreground);
+                    margin-bottom: 8px;
+                    }
                 </style>
             </head>
             <body>
+
                 <div class="header">
-                    <span class="remaining-highlight">Restante: R$ ${usage.credits_remaining_brl.toFixed(2)}</span>
-                    <span class="plan-badge">${usage.plan_name}</span>
+
+                    <div class="balance-container">
+                        <div class="balance-title">
+                            SALDO DISPONÍVEL
+                        </div>
+
+                        <div class="balance-value">
+                            R$ ${usage.credits_remaining_brl.toFixed(2)}
+                        </div>
+                    </div>
+
+                    <span class="plan-badge">
+                        ${usage.plan_name}
+                    </span>
+
                 </div>
 
-                <div class="progress-track" title="${usage.percent_used.toFixed(1)}% consumido">
+                <div
+                    class="progress-track"
+                    title="${usage.percent_used.toFixed(1)}% consumido"
+                >
                     <div class="progress-fill"></div>
                 </div>
 
                 <div class="meta-row">
-                    <span>Usado: R$ ${usedBrl.toFixed(2)} (${usage.percent_used.toFixed(1)}%)</span>
-                    <span>Total: R$ ${usage.credits_total_brl.toFixed(2)}</span>
+                    <span>
+                        Utilizado: R$ ${usedBrl.toFixed(2)}
+                    </span>
+
+                    <span>
+                        Total: R$ ${usage.credits_total_brl.toFixed(2)}
+                    </span>
                 </div>
 
                 <div class="meta-row">
-                    <span>Jobs no mês: ${usage.jobs_used_this_month}/${usage.monthly_job_quota}</span>
-                    <span>Renova: ${renewsDate}</span>
+                    <span>
+                        Jobs: ${usage.jobs_used_this_month}/${usage.monthly_job_quota}
+                    </span>
+
+                    <span>
+                        Renova: ${renewsDate}
+                    </span>
                 </div>
 
                 ${statusBanner}
+
             </body>
             </html>
-        `;
+            `;
     }
 }

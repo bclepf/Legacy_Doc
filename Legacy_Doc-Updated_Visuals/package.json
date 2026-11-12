@@ -16,7 +16,7 @@
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-{
+      {
         "command": "legacydoc.login",
         "title": "Legacy Doc: Entrar com E-mail e Senha",
         "icon": "$(sign-in)"
@@ -93,17 +93,18 @@
     "viewsWelcome": [
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Bem-vindo ao Legacy Doc!\n\nAutentique-se com sua conta ou crie um cadastro para liberar as ferramentas de análise.\n[$(key) Login](command:legacydoc.login)\n[$(person-add) Criar Nova Conta](command:legacydoc.register)\n[$(unlock) Esqueci Minha Senha](command:legacydoc.resetPassword)",
+        "contents": "⚡ Legacy Doc\n\nIA para Sistemas Legados\n\nTransforme código legado em documentação inteligente de forma rápida e organizada.\n\n[$(person-add) Criar Conta](command:legacydoc.register)\n\n[$(key) Entrar](command:legacydoc.login)\n\n[$(unlock) Recuperar Senha](command:legacydoc.resetPassword)\n\n━━━━━━━━━━━━━━━━━━━━━━━\n\n✨ Recursos Disponíveis\n\n✅ Documentação Automática\n\n✅ Análise Arquitetural\n\n✅ Auditoria de Código\n\n✅ Exportação Markdown\n\n✅ Exportação PDF\n\n✅ Contexto Personalizado por Projeto",
         "when": "!legacydoc.isAuthenticated"
       },
       {
         "view": "legacydoc.welcomeView",
-        "contents": "A pasta atual não possui um repositório Git inicializado.\n\nInicie um repositório Git (`git init`) ou abra um projeto versionado para habilitar a análise.\n\n---\nHistórico e Conta:\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
+        "contents": "✅ Login realizado com sucesso.\n\n⚠️ Nenhum repositório Git encontrado.\n\nAbra um projeto existente ou execute `git init` para habilitar a documentação.\n\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📚 Histórico e Conta\n\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
         "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount == 0"
+
       },
       {
         "view": "legacydoc.welcomeView",
-        "contents": "Repositório Git detectado! Escolha o formato para documentar seu código:\n[$(markdown) Gerar Documentação (.md)](command:legacydoc.generateMarkdown)\n[$(file-pdf) Gerar Documentação (.pdf)](command:legacydoc.generatePdf)\n\n---\nContexto do Projeto (.md):\n[$(note) Adicionar Contexto (.md)](command:legacydoc.addContext)\n[$(close-all) Remover Contexto Atual](command:legacydoc.removeContext)\n\n---\nHistórico e Sessão:\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
+        "contents": "📁 Projeto Detectado\n\n✅ Seu repositório está pronto para análise.\n\n🚀 Geração de Documentação\n\n[$(markdown) Gerar Documentação Markdown](command:legacydoc.generateMarkdown)\n\n[$(file-pdf) Gerar Documentação PDF](command:legacydoc.generatePdf)\n\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📄 Contexto do Projeto\n\n[$(note) Adicionar Contexto](command:legacydoc.addContext)\n\n[$(close-all) Remover Contexto Atual](command:legacydoc.removeContext)\n\n━━━━━━━━━━━━━━━━━━━━━━━\n\n📚 Histórico e Conta\n\n[$(history) Minhas Documentações Geradas](command:legacydoc.listDocuments)\n\n[$(sign-out) Sair (Logout)](command:legacydoc.logout)",
         "when": "legacydoc.isAuthenticated && gitOpenRepositoryCount > 0"
       }
     ],
@@ -197,6 +198,7 @@
     "@types/adm-zip": "^0.5.5",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/pdfkit": "^0.17.7",
     "@types/vscode": "^1.136.0",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
     "@typescript-eslint/parser": "^8.18.1",
@@ -205,9 +207,11 @@
     "esbuild": "^0.24.2",
     "eslint": "^9.17.0",
     "npm-run-all": "^4.1.5",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.72.2"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16"
+    "adm-zip": "^0.5.16",
+    "pdfkit": "^0.20.2"
   }
 }
