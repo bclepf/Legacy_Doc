@@ -298,8 +298,9 @@ export class DocumentationService {
             await this.onUsageUpdated();
         }
         if (currentUsage.exhausted) {
+            const remainingCredits = Math.round((currentUsage.credits_remaining_brl || 0) * 100);
             throw new Error(
-                `Saldo de créditos esgotado (R$ ${currentUsage.credits_remaining_brl.toFixed(2)} restantes). Recarregue seus créditos para gerar novas documentações.`
+                `Saldo de créditos esgotado (${remainingCredits} créditos restantes). Recarregue sua conta para gerar novas documentações.`
             );
         }
 

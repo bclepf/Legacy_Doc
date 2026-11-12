@@ -14,6 +14,13 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
         this.statusBarItem.tooltip = 'Legacy Doc: Clique para atualizar seu saldo de créditos';
     }
 
+    /**
+     * Converte o saldo em BRL da API para unidades de crédito (R$ 1,00 = 100 créditos)
+     */
+    private toCredits(brlValue: number): number {
+        return Math.round((brlValue || 0) * 100);
+    }
+
     public resolveWebviewView(
         webviewView: vscode.WebviewView,
         _context: vscode.WebviewViewResolveContext,
@@ -71,7 +78,8 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
             ? '$(warning)'
             : '$(credit-card)';
 
-        this.statusBarItem.text = `${icon} Legacy Doc: R$ ${usage.credits_remaining_brl.toFixed(2)} (${usage.percent_used.toFixed(0)}% usado)`;
+        const remainingCredits = this.toCredits(usage.credits_remaining_brl);
+        this.statusBarItem.text = `${icon} Legacy Doc: ${remainingCredits} créditos (${usage.percent_used.toFixed(0)}% usado)`;
         this.statusBarItem.show();
     }
 
@@ -109,7 +117,9 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
         }
 
         const percentClamped = Math.min(100, Math.max(0, usage.percent_used));
-        const usedBrl = Math.max(0, usage.credits_total_brl - usage.credits_remaining_brl);
+        const totalCredits = this.toCredits(usage.credits_total_brl);
+        const remainingCredits = this.toCredits(usage.credits_remaining_brl);
+        const usedCredits = Math.max(0, totalCredits - remainingCredits);
         const renewsDate = new Date(usage.renews_at).toLocaleDateString('pt-BR');
 
         let barColor = 'var(--vscode-progressBar-background, #0e70c0)';
@@ -119,14 +129,14 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
             barColor = 'var(--vscode-errorForeground, #f14c4c)';
             statusBanner = `
                 <div class="alert alert-error">
-                    Saldo esgotado! Recarregue seus créditos para gerar novas documentações.
+                    Créditos esgotados! Recarregue sua conta para gerar novas documentações.
                 </div>
             `;
         } else if (usage.near_limit) {
             barColor = 'var(--vscode-editorWarning-foreground, #cca700)';
             statusBanner = `
                 <div class="alert alert-warning">
-                    Atenção: Seu consumo atingiu ${usage.percent_used.toFixed(0)}% do limite.
+                    Atenção: Você já utilizou ${usage.percent_used.toFixed(0)}% dos seus créditos.
                 </div>
             `;
         }
@@ -204,7 +214,7 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
             </head>
             <body>
                 <div class="header">
-                    <span class="remaining-highlight">Restante: R$ ${usage.credits_remaining_brl.toFixed(2)}</span>
+                    <span class="remaining-highlight">Restante: ${remainingCredits} créditos</span>
                     <span class="plan-badge">${usage.plan_name}</span>
                 </div>
 
@@ -213,8 +223,8 @@ export class UsageViewProvider implements vscode.WebviewViewProvider {
                 </div>
 
                 <div class="meta-row">
-                    <span>Usado: R$ ${usedBrl.toFixed(2)} (${usage.percent_used.toFixed(1)}%)</span>
-                    <span>Total: R$ ${usage.credits_total_brl.toFixed(2)}</span>
+                    <span>Usado: ${usedCredits} créditos (${usage.percent_used.toFixed(1)}%)</span>
+                    <span>Total: ${totalCredits} créditos</span>
                 </div>
 
                 <div class="meta-row">
